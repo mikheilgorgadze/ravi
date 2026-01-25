@@ -54,8 +54,8 @@ int main(void) {
 
     Editor editor = {
         .title = "Ravi Editor",
-        .width = 1024,
-        .height = 1024,
+        .width = 1920,
+        .height = 1200,
         .codepointSize = 0,
         .frameCounter = 0,
         .scrollOffset = 0.0,
@@ -233,10 +233,7 @@ void RenderText(Editor *editor) {
             charWidth = editor->textBuffer->font.glyphs[index].advanceX;
         }
 
-        if (isNewLine) {
-            drawPos.x = 5;
-            drawPos.y += FONT_SIZE;
-        } else if (nextCodePoint != '\0' && (drawPos.x + charWidth > editor->textBox.width)) {
+        if (!isNewLine && nextCodePoint != '\0' && (drawPos.x + charWidth > editor->textBox.width)) {
             drawPos.x = 5;
             drawPos.y += FONT_SIZE;
         }
@@ -253,9 +250,12 @@ void RenderText(Editor *editor) {
             isCursorDrawn = true;
         }
 
-        if (nextCodePoint == '\0') continue;
+        if (nextCodePoint == '\0') break;
 
-        if (!isNewLine) {
+        if (isNewLine) {
+            drawPos.x = 5;
+            drawPos.y += FONT_SIZE;
+        } else {
             DrawTextCodepoint(editor->textBuffer->font, nextCodePoint, screenPos, FONT_SIZE, BLACK);
             drawPos.x += charWidth;
         } 
@@ -296,14 +296,14 @@ void HandleScroll(Editor *editor) {
 
 void HandleArrowKeys(Editor *editor) {
     editor->isSearchingCursor = true;
+
     if (IsKeyPressedRepeat(KEY_LEFT) || IsKeyPressed(KEY_LEFT)) {
         if (editor->textBuffer->cursorByteOffset<= 0) {
             editor->textBuffer->cursorByteOffset = 0;
         } else {
             editor->textBuffer->cursorByteOffset--;
             unsigned charAtCursor = (unsigned char)  editor->textBuffer->input[editor->textBuffer->cursorByteOffset];
-            //if (charAtCursor == '\n') editor->textBuffer->cursorByteOffset++;
-            while ( (charAtCursor & 0xC0) == 0x80 ) {
+            while ( (editor->textBuffer->cursorByteOffset > 0) && (charAtCursor & 0xC0) == 0x80 ) {
                 editor->textBuffer->cursorByteOffset--;
                 charAtCursor = (unsigned char) editor->textBuffer->input[editor->textBuffer->cursorByteOffset];
             }
@@ -312,12 +312,12 @@ void HandleArrowKeys(Editor *editor) {
 
     if ((IsKeyPressedRepeat(KEY_RIGHT) || IsKeyPressed(KEY_RIGHT)) && editor->textBuffer->cursorByteOffset < editor->textBuffer->size) {
         int byteSize = 0;
-        GetCodepointNext(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
+        GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
+
         editor->textBuffer->cursorByteOffset += byteSize;
     }
 
-    //Disabled temporarily
-    if (IsKeyPressed(KEY_UP) && false) {
+    if (IsKeyPressed(KEY_UP)) {
         int lineCount;
         char *input = editor->textBuffer->input;
         const char **splitText = TextSplit(input, '\n', &lineCount);
