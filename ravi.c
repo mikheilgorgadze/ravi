@@ -1,23 +1,39 @@
+#include <assert.h>
 #include <raylib.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define DARK_GRAY CLITERAL(Color) {48, 48, 48, 48}
+#define DARK_GRAY CLITERAL(Color) {48, 48, 48, 255}
+#define GUTTER_COLOR CLITERAL(Color) {35, 35, 35, 255}
 #define MAX_INPUT_CHAR 100000
 #define FONT_SIZE 40
 #define PADDING 40
+#define GUTTER_WIDTH 100
+#define TEXT_OFFSET_X 5
+#define TEXT_OFFSET_Y 5
+#define TEXT_ARENA_SIZE 100 * 1024 * 1024
 
 #define FONT_SANS "resources/fonts/NotoSansGeorgian-Regular.ttf"
-#define FONT_MONO "resources/fonts/Everson Mono.ttf"
+#define FONT_MONO "resources/fonts/FiraCode-Medium.ttf"
 
 typedef struct {
-    char input[MAX_INPUT_CHAR + 1];
-    int size;
+    unsigned char *memory;
+    size_t capacity;
+    size_t used;
+} Arena;
+
+typedef struct {
+    char* input;
+    size_t size;
+    size_t capacity;
     int cursorByteOffset;
+    int selectionAnchor;
     Font font;
 } TextBuffer;
+
 
 typedef struct {
     const char* title;
@@ -32,25 +48,47 @@ typedef struct {
     bool mouseOnText;
     Vector2 cursorPosition;
     TextBuffer *textBuffer;
+    Rectangle gutter;
     Rectangle textBox;
 } Editor;
 
-void InsertCharacter(TextBuffer *buffer, int key);
+void InsertCharacter(TextBuffer *buffer, Arena *arena, int key);
 void DeleteCharacter(TextBuffer *buffer);
 void RenderText(Editor *editor);
-void UpdateEditor(Editor *editor);
+void UpdateEditor(Editor* editor, Arena *arena);
 void HandleScroll(Editor *editor);
-void HandleArrowKeys(Editor *editor);
+void HandleKeyboardInput(Editor *editor, Arena *arena);
+void HandleMouseEvents(Editor *editor);
 size_t string_len_utf8(const char *str);
+int GetLineStart(char *buffer, int currentOffset);
+int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize);
+int GetPreviousCharSize(char *buffer, int currentOffset);
+size_t safe_strlen(const char *s, size_t max_len);
+void InsertBytes(TextBuffer *buffer, Arena *arena, const char *data, size_t size);
+int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY);
+int min(int x, int y);
+int max(int x, int y);
+unsigned char* ArenaAlloc(Arena *arena, size_t size);
+
+Font gutterFont;
 
 int main(void) {
+    Arena textInputArena = (Arena) {
+        .memory = malloc(TEXT_ARENA_SIZE),
+        .used = 0,
+        .capacity = TEXT_ARENA_SIZE
+    };
+    
     const char * activeFontName = FONT_SANS;
 
     TextBuffer textBuffer = {
-        .input = "\0",
+        .capacity = MAX_INPUT_CHAR,
         .cursorByteOffset = 0,
         .size = 0,
     };
+
+    textBuffer.input = (char *) ArenaAlloc(&textInputArena, textBuffer.capacity);
+    textBuffer.input[0] = '\0';
 
     Editor editor = {
         .title = "Ravi Editor",
@@ -63,13 +101,19 @@ int main(void) {
         .isSearchingCursor = false,
         .mouseOnText = false,
         .textBuffer = &textBuffer,
-        .textBox = {
+        .gutter = {
             .x = PADDING,
             .y = PADDING,
         },
+        .textBox = {
+            .x = PADDING + GUTTER_WIDTH,
+            .y = PADDING,
+        },
     };
-    editor.textBox.width = editor.width - PADDING * 2;
+    editor.textBox.width = editor.width - (PADDING + GUTTER_WIDTH) * 2;
     editor.textBox.height = editor.height - PADDING * 2;
+    editor.gutter.width = GUTTER_WIDTH;
+    editor.gutter.height= editor.textBox.height; 
 
     int codepoints[512];
     int codepintCount = 0;
@@ -87,14 +131,16 @@ int main(void) {
 
     textBuffer.font = LoadFontEx(activeFontName, FONT_SIZE, codepoints, codepintCount);
     SetTextureFilter(textBuffer.font.texture, TEXTURE_FILTER_BILINEAR);
+    gutterFont = LoadFont(FONT_MONO);
 
     while(!WindowShouldClose()) {
-        UpdateEditor(&editor);
+        UpdateEditor(&editor, &textInputArena);
 
         BeginDrawing();
 
         ClearBackground(DARK_GRAY);
         DrawRectangleRec(editor.textBox, LIGHTGRAY);
+        DrawRectangleRec(editor.gutter, GUTTER_COLOR);
         RenderText(&editor);
 
         EndDrawing();
@@ -105,7 +151,7 @@ int main(void) {
     return 0;
 }
 
-void UpdateEditor(Editor* editor) {
+void UpdateEditor(Editor* editor, Arena *arena) {
     HandleScroll(editor);
 
     if (IsWindowResized()) {
@@ -117,23 +163,8 @@ void UpdateEditor(Editor* editor) {
         MaximizeWindow();
     }
 
-    HandleArrowKeys(editor);
-
-    if (IsKeyPressed(KEY_ENTER)) {
-        editor->isSearchingCursor = true;
-        InsertCharacter(editor->textBuffer, '\n');
-    }
-
-    if (CheckCollisionPointRec(GetMousePosition(), editor->textBox)) {
-        editor->mouseOnText = true;
-    } else {
-        editor->mouseOnText = false;
-    }
-
-    if (GetMouseWheelMove() != 0) {
-        editor->scrollOffset -= GetMouseWheelMove() * FONT_SIZE;
-        editor->isSearchingCursor = false;
-    }
+    HandleKeyboardInput(editor, arena);
+    HandleMouseEvents(editor);
 
     if (editor->mouseOnText) {
         editor->frameCounter++;
@@ -141,7 +172,7 @@ void UpdateEditor(Editor* editor) {
         int key = GetCharPressed();
 
         while (key > 0) {
-            InsertCharacter(editor->textBuffer, key);
+            InsertCharacter(editor->textBuffer, arena, key);
             key = GetCharPressed();
         }
 
@@ -156,34 +187,16 @@ void UpdateEditor(Editor* editor) {
     }
 }
 
-void InsertCharacter(TextBuffer *buffer, int key) {
+void InsertCharacter(TextBuffer *buffer, Arena *arena, int key) {
     int byteSize = 0;
-    if (buffer->size + 4 < MAX_INPUT_CHAR) {
-        const char *utf8Symbol = CodepointToUTF8(key, &byteSize);
-        //printf("Codepoint: %s\n", utf8Symbol);
-        memmove(
-            buffer->input + buffer->cursorByteOffset + byteSize,
-            buffer->input + buffer->cursorByteOffset, 
-            buffer->size - buffer->cursorByteOffset + 1
-        );
-        memcpy(
-            &buffer->input[buffer->cursorByteOffset], 
-            utf8Symbol, 
-            byteSize
-        );
-        buffer->cursorByteOffset += byteSize;
-        buffer->size += byteSize;
-    } 
+    const char *utf8Symbol = CodepointToUTF8(key, &byteSize);
+    InsertBytes(buffer, arena, utf8Symbol, byteSize);
 }
 
 void DeleteCharacter(TextBuffer *buffer) {
     if (buffer->cursorByteOffset <= 0) return;
-    int bytesToDelete = 1;
 
-    // check if leading bits are continuation bits or not
-    while((buffer->cursorByteOffset - bytesToDelete > 0) && ((unsigned char) buffer->input[buffer->cursorByteOffset - bytesToDelete] & 0xC0) == 0x80) {
-        bytesToDelete++;
-    }
+    int bytesToDelete = GetPreviousCharSize(buffer->input, buffer->cursorByteOffset);
 
     memmove(
         buffer->input + (buffer->cursorByteOffset - bytesToDelete),
@@ -193,6 +206,7 @@ void DeleteCharacter(TextBuffer *buffer) {
 
     buffer->cursorByteOffset -= bytesToDelete;
     buffer->size -= bytesToDelete;
+    buffer->selectionAnchor = buffer->cursorByteOffset; 
 }
 
 void DrawCursor(Editor *editor, Vector2 position) {
@@ -206,18 +220,25 @@ void DrawCursor(Editor *editor, Vector2 position) {
     if (editor->frameCounter/20 % 2 == 0) {
         DrawRectangleRec(cursor, BLACK);
     }
-    
 }
 
 void RenderText(Editor *editor) {
     char *ptr = editor->textBuffer->input;
     bool isCursorDrawn = false;
     bool shouldRender = true;
+    static int linePositions[MAX_INPUT_CHAR] = {};
+    int lineNumber = 0;
 
-    Vector2 drawPos = {.x = 5, .y = 8};
+    Vector2 drawPos = {.x = TEXT_OFFSET_X, .y = TEXT_OFFSET_Y};
+
+    linePositions[0] = TEXT_OFFSET_Y + editor->textBox.y - editor->scrollOffset;
+
+
+    int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+    int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+    int currentIndex = 0;
 
     BeginScissorMode((int) editor->textBox.x, (int) editor->textBox.y, (int) editor->textBox.width, (int) editor->textBox.height);
-
     while (shouldRender) {
         int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
 
@@ -234,7 +255,7 @@ void RenderText(Editor *editor) {
         }
 
         if (!isNewLine && nextCodePoint != '\0' && (drawPos.x + charWidth > editor->textBox.width)) {
-            drawPos.x = 5;
+            drawPos.x = TEXT_OFFSET_X;
             drawPos.y += FONT_SIZE;
         }
 
@@ -252,9 +273,17 @@ void RenderText(Editor *editor) {
 
         if (nextCodePoint == '\0') break;
 
+        if (currentIndex >= start && currentIndex < end) {
+            DrawRectangle(screenPos.x, screenPos.y, charWidth, FONT_SIZE, SKYBLUE);
+        }
+
+        currentIndex += editor->codepointSize;
+
         if (isNewLine) {
-            drawPos.x = 5;
+            drawPos.x = TEXT_OFFSET_X;
             drawPos.y += FONT_SIZE;
+            lineNumber++;
+            linePositions[lineNumber] = drawPos.y + editor->textBox.y - editor->scrollOffset;
         } else {
             DrawTextCodepoint(editor->textBuffer->font, nextCodePoint, screenPos, FONT_SIZE, BLACK);
             drawPos.x += charWidth;
@@ -275,6 +304,24 @@ void RenderText(Editor *editor) {
     editor->totalContentHeight = drawPos.y + FONT_SIZE;
 
     EndScissorMode();
+
+    Vector2 gutterPos = {
+        .x = editor->gutter.x + ((float) GUTTER_WIDTH / 2),
+    };
+
+    BeginScissorMode(editor->gutter.x, editor->gutter.y, editor->gutter.width, editor->gutter.height);
+    for (int i = 0; i <= lineNumber; i++) {
+        float y = linePositions[i];
+
+        if (y < editor->gutter.y - FONT_SIZE || y > editor->gutter.y + editor->gutter.height) {
+            continue;
+        }
+
+        gutterPos.y = y;
+
+        DrawTextEx(gutterFont, TextFormat("%d", i+1), gutterPos, FONT_SIZE, 1, LIGHTGRAY);
+    }
+    EndScissorMode();
 }
 
 void HandleScroll(Editor *editor) {
@@ -294,19 +341,16 @@ void HandleScroll(Editor *editor) {
     }
 }
 
-void HandleArrowKeys(Editor *editor) {
+void HandleKeyboardInput(Editor *editor, Arena *arena) {
     editor->isSearchingCursor = true;
 
     if (IsKeyPressedRepeat(KEY_LEFT) || IsKeyPressed(KEY_LEFT)) {
         if (editor->textBuffer->cursorByteOffset<= 0) {
             editor->textBuffer->cursorByteOffset = 0;
         } else {
-            editor->textBuffer->cursorByteOffset--;
-            unsigned charAtCursor = (unsigned char)  editor->textBuffer->input[editor->textBuffer->cursorByteOffset];
-            while ( (editor->textBuffer->cursorByteOffset > 0) && (charAtCursor & 0xC0) == 0x80 ) {
-                editor->textBuffer->cursorByteOffset--;
-                charAtCursor = (unsigned char) editor->textBuffer->input[editor->textBuffer->cursorByteOffset];
-            }
+            int charSize = GetPreviousCharSize(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+            editor->textBuffer->cursorByteOffset -= charSize;
+            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
         }
     }
 
@@ -315,43 +359,149 @@ void HandleArrowKeys(Editor *editor) {
         GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
 
         editor->textBuffer->cursorByteOffset += byteSize;
+        editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
     }
 
     if (IsKeyPressed(KEY_UP)) {
-        int lineCount;
-        char *input = editor->textBuffer->input;
-        const char **splitText = TextSplit(input, '\n', &lineCount);
-        size_t inputStrSize = string_len_utf8(editor->textBuffer->input);
-        size_t prevLineLen = 0;
-        if (lineCount > 1) {
-            prevLineLen = strlen(splitText[lineCount-2]);
+        int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+        int currentCollumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
+
+        int prevLineOffset = editor->textBuffer->cursorByteOffset - currentCollumn - 1;
+
+        if (prevLineOffset < 0) return;
+        int startOfPrevLine = GetLineStart(editor->textBuffer->input, prevLineOffset);
+
+        int previousLineLength = prevLineOffset - startOfPrevLine;
+        if (previousLineLength >= 0) {
+            int minOffset = (previousLineLength < currentCollumn) ? previousLineLength : currentCollumn;
+            int newCursorOffset = startOfPrevLine + minOffset;
+            while ( (editor->textBuffer->input[newCursorOffset] & 0xC0) == 0x80) {
+                newCursorOffset--;
+            }
+            editor->textBuffer->cursorByteOffset = newCursorOffset;
+            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
         }
-        size_t lastLineLen = strlen(splitText[lineCount-1]);
-
-        printf("cursorByteOffset before: %d\n", editor->textBuffer->cursorByteOffset);
-
-        int newOffset = 0;
-        if (prevLineLen > lastLineLen) {
-            newOffset = editor->textBuffer->cursorByteOffset - lastLineLen - (prevLineLen - lastLineLen);
-        } else {
-            newOffset = editor->textBuffer->cursorByteOffset - lastLineLen;
-        }
-
-        if (newOffset < 0) {
-            editor->textBuffer->cursorByteOffset = 0;
-        } else {
-            editor->textBuffer->cursorByteOffset = newOffset;
-        }
-
-        printf("textBuffer size: %d\n", editor->textBuffer->size);
-        printf("textBuffer string size: %lu\n", inputStrSize);
-        printf("prevLineLen: %lu\n", prevLineLen);
-        printf("lastLineLen: %lu\n", lastLineLen);
-        printf("cursorByteOffset after: %d\n", editor->textBuffer->cursorByteOffset);
     }
 
     if (IsKeyPressed(KEY_DOWN)) {
+        int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+        int currentCollumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
+
+        int endOfCurrentLine = GetLineEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
+
+        if (endOfCurrentLine >= editor->textBuffer->size) return;
+
+        int startOfNextLine =  endOfCurrentLine + 1;
+
+        int nextLineEnd = GetLineEnd(editor->textBuffer->input, startOfNextLine, editor->textBuffer->size);
+        int nextLineLength = nextLineEnd - startOfNextLine;
+        if (nextLineLength >= 0) {
+            int minOffset = (nextLineLength < currentCollumn) ? nextLineLength : currentCollumn;
+            int newCursorOffset = startOfNextLine + minOffset;
+            while ( (editor->textBuffer->input[newCursorOffset] & 0xC0) == 0x80) {
+                newCursorOffset--;
+            }
+            editor->textBuffer->cursorByteOffset = newCursorOffset;
+            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+        }
     }
+
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER)) {
+        editor->isSearchingCursor = true;
+        InsertCharacter(editor->textBuffer, arena, '\n');
+    }
+
+    // copy
+    // TODO
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_C)) {
+        int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        char *highlightedText = &editor->textBuffer->input[start] + end;
+        printf("---------------------------------------------------------\n");
+        printf("anchor: %d, cursor: %d\n", editor->textBuffer->selectionAnchor, editor->textBuffer->cursorByteOffset);
+        printf("start: %d, end: %d\n", start, end);
+        printf("text buffer: %s\n", editor->textBuffer->input);
+        printf("highlightedText: %s\n", highlightedText);
+        printf("---------------------------------------------------------\n");
+        SetClipboardText(editor->textBuffer->input);
+    }
+
+    // paste
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
+        const char *clipboardText = GetClipboardText();
+        size_t pastedSize = safe_strlen(clipboardText, editor->textBuffer->capacity);
+
+        InsertBytes(editor->textBuffer, arena, clipboardText, pastedSize);
+    }
+}
+
+void HandleMouseEvents(Editor *editor) {
+    if (CheckCollisionPointRec(GetMousePosition(), editor->textBox)) {
+        editor->mouseOnText = true;
+    } else {
+        editor->mouseOnText = false;
+    }
+
+    if (GetMouseWheelMove() != 0) {
+        editor->scrollOffset -= GetMouseWheelMove() * FONT_SIZE;
+        editor->isSearchingCursor = false;
+    }
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
+        editor->textBuffer->cursorByteOffset = index;
+        editor->textBuffer->selectionAnchor = index;
+    }
+
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
+        editor->textBuffer->cursorByteOffset = index;
+    }
+}
+
+int GetLineStart(char *buffer, int currentOffset) {
+    if (currentOffset <= 0) return 0;
+
+    int scanIndex = currentOffset;
+
+    while(scanIndex > 0) {
+        scanIndex --;
+        if (buffer[scanIndex] == '\n') {
+            return scanIndex + 1;
+        }
+    }
+
+    return 0;
+}
+
+int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize) {
+    if (currentOffset < 0) return 0;
+    if (bufferSize < currentOffset) return 0;
+
+    int scanIndex = currentOffset;
+
+    while(scanIndex < bufferSize) {
+        if (buffer[scanIndex] == '\n') {
+            return scanIndex;
+        }
+        scanIndex ++;
+    }
+
+    return bufferSize;
+}
+
+int GetPreviousCharSize(char *buffer, int currentOffset) {
+    if (currentOffset <= 0) return 0;
+
+    int charSize = 1;
+    currentOffset--;
+
+    while (currentOffset > 0 && (buffer[currentOffset] & 0xC0) == 0x80 ) {
+        charSize ++;
+        currentOffset--;
+    }
+
+    return charSize;
 }
 
 size_t string_len_utf8(const char *str) {
@@ -363,4 +513,109 @@ size_t string_len_utf8(const char *str) {
         str++;
     }
     return count;
+}
+
+size_t safe_strlen(const char *s, size_t max_len) {
+    size_t length = 0;
+    if (s == NULL) { // Check for null pointer
+        return 0;
+    }
+    while (length < max_len && s[length] != '\0') { // Check bounds and terminator
+        length++;
+    }
+    return length;
+}
+
+void InsertBytes(TextBuffer *buffer, Arena *arena, const char *data, size_t size) {
+    if (buffer->size + size > buffer->capacity) {
+        size_t newCapacity = (buffer->capacity + size) * 2;
+        char *newPtr = (char *)ArenaAlloc(arena, newCapacity);
+
+        memcpy(newPtr, buffer->input, buffer->size + 1);
+
+        buffer->input = newPtr;
+        buffer->capacity = newCapacity;
+    }
+
+    memmove(
+        buffer->input + buffer->cursorByteOffset + size,
+        buffer->input + buffer->cursorByteOffset, 
+        buffer->size - buffer->cursorByteOffset + 1
+    );
+    memcpy(
+        &buffer->input[buffer->cursorByteOffset], 
+        data, 
+        size
+    );
+    buffer->cursorByteOffset += size;
+    buffer->size += size;
+    buffer->selectionAnchor = buffer->cursorByteOffset;
+}
+
+int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY) {
+    int offset = editor->textBuffer->cursorByteOffset;
+
+    int targetRow = (mouseY - (PADDING + TEXT_OFFSET_Y) + (int)editor->scrollOffset) / FONT_SIZE;
+    targetRow = max(targetRow, 0);
+
+    int lineNumber = 0;
+    int startOfLineIndex = 0;
+    if (targetRow > 0) {
+        for (int i = 0; i < editor->textBuffer->size; i++) {
+            if (editor->textBuffer->input[i] == '\n') {
+                lineNumber++;
+                if (lineNumber == targetRow) {
+                    startOfLineIndex = i + 1;
+                    break;
+                }
+            }
+        }
+        if (lineNumber < targetRow) {
+            startOfLineIndex = editor->textBuffer->size;
+        }
+    }
+
+    int currentPixelWidth = PADDING + GUTTER_WIDTH + TEXT_OFFSET_X;
+    int i = startOfLineIndex;
+    while (i < editor->textBuffer->size) {
+        char *input = editor->textBuffer->input;
+        if (input[i] == '\n' || input[i] == '\0') {
+            editor->textBuffer->cursorByteOffset = i;
+            break;
+        }
+
+        int byteSize = 0;
+        int codePoint = GetCodepoint(&input[i], &byteSize);
+        int index = GetGlyphIndex(editor->textBuffer->font, codePoint);
+        int charWidth = editor->textBuffer->font.glyphs[index].advanceX;
+
+        currentPixelWidth += charWidth;
+        if (mouseX < currentPixelWidth - (charWidth / 2)) {
+            editor->textBuffer->cursorByteOffset = i;
+            break;
+        } else {
+            i+=byteSize;
+        }
+    }
+
+    return i;
+}
+
+int min(int x, int y) {
+    if (x > y) return y;
+    return x;
+}
+
+int max(int x, int y) {
+    if (x < y) return y;
+    return x;
+}
+
+unsigned char* ArenaAlloc(Arena *arena, size_t size) {
+    assert(arena->used + size <= arena->capacity);
+
+    void *ptr = arena->memory + arena->used;
+    arena->used += size;
+
+    return ptr;
 }
