@@ -54,6 +54,7 @@ typedef struct {
 
 void InsertCharacter(TextBuffer *buffer, Arena *arena, int key);
 void DeleteCharacter(TextBuffer *buffer);
+void DeleteRange(TextBuffer *buffer, int start, int end);
 void RenderText(Editor *editor);
 void UpdateEditor(Editor* editor, Arena *arena);
 void HandleScroll(Editor *editor);
@@ -62,6 +63,8 @@ void HandleMouseEvents(Editor *editor);
 size_t string_len_utf8(const char *str);
 int GetLineStart(char *buffer, int currentOffset);
 int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize);
+int GetWordStart(char *buffer, int currentOffset);
+int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize);
 int GetPreviousCharSize(char *buffer, int currentOffset);
 size_t safe_strlen(const char *s, size_t max_len);
 void InsertBytes(TextBuffer *buffer, Arena *arena, const char *data, size_t size);
@@ -127,6 +130,7 @@ int main(void) {
 
     SetTargetFPS(60);
     InitWindow(editor.width, editor.height, editor.title);
+    SetExitKey(0);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
     textBuffer.font = LoadFontEx(activeFontName, FONT_SIZE, codepoints, codepintCount);
@@ -178,7 +182,15 @@ void UpdateEditor(Editor* editor, Arena *arena) {
 
         if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
             editor->isSearchingCursor = true;
-            DeleteCharacter(editor->textBuffer);
+            if (editor->textBuffer->cursorByteOffset != editor->textBuffer->selectionAnchor) {
+                int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+                int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+
+                DeleteRange(editor->textBuffer, start, end);
+
+            } else {
+                DeleteCharacter(editor->textBuffer);
+            }
         }
 
     } else {
@@ -198,15 +210,23 @@ void DeleteCharacter(TextBuffer *buffer) {
 
     int bytesToDelete = GetPreviousCharSize(buffer->input, buffer->cursorByteOffset);
 
+    DeleteRange(buffer, buffer->cursorByteOffset - bytesToDelete, buffer->cursorByteOffset);
+}
+
+void DeleteRange(TextBuffer *buffer, int start, int end) {
+    if (start >= end)return;
+
+    int count = end - start;
+
     memmove(
-        buffer->input + (buffer->cursorByteOffset - bytesToDelete),
-        buffer->input + buffer->cursorByteOffset, 
-        buffer->size - buffer->cursorByteOffset + 1
+        buffer->input + start,
+        buffer->input + end, 
+        buffer->size - end + 1
     );
 
-    buffer->cursorByteOffset -= bytesToDelete;
-    buffer->size -= bytesToDelete;
+    buffer->cursorByteOffset = start;
     buffer->selectionAnchor = buffer->cursorByteOffset; 
+    buffer->size -= count;
 }
 
 void DrawCursor(Editor *editor, Vector2 position) {
@@ -344,13 +364,30 @@ void HandleScroll(Editor *editor) {
 void HandleKeyboardInput(Editor *editor, Arena *arena) {
     editor->isSearchingCursor = true;
 
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+    }
+
     if (IsKeyPressedRepeat(KEY_LEFT) || IsKeyPressed(KEY_LEFT)) {
         if (editor->textBuffer->cursorByteOffset<= 0) {
             editor->textBuffer->cursorByteOffset = 0;
+            if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+                editor->textBuffer->selectionAnchor = 0;
+            }
         } else {
+            int cursorBeforeCtrl = editor->textBuffer->cursorByteOffset;
+
             int charSize = GetPreviousCharSize(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
             editor->textBuffer->cursorByteOffset -= charSize;
-            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+
+            int wordStart = GetWordStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+            int wordEnd = GetWordEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
+            if (IsKeyDown(KEY_LEFT_CONTROL)) {
+                editor->textBuffer->cursorByteOffset = wordStart;
+            }
+            if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+                editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            }
         }
     }
 
@@ -358,34 +395,46 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
         int byteSize = 0;
         GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
 
+        int cursorBeforeCtrl = editor->textBuffer->cursorByteOffset;
         editor->textBuffer->cursorByteOffset += byteSize;
-        editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+
+        int wordStart = GetWordStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+        int wordEnd = GetWordEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
+        if (IsKeyDown(KEY_LEFT_CONTROL)) {
+            editor->textBuffer->cursorByteOffset = wordEnd;
+        }
+
+        if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+        }
     }
 
     if (IsKeyPressed(KEY_UP)) {
         int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
-        int currentCollumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
+        int currentColumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
 
-        int prevLineOffset = editor->textBuffer->cursorByteOffset - currentCollumn - 1;
+        int prevLineOffset = editor->textBuffer->cursorByteOffset - currentColumn - 1;
 
         if (prevLineOffset < 0) return;
         int startOfPrevLine = GetLineStart(editor->textBuffer->input, prevLineOffset);
 
         int previousLineLength = prevLineOffset - startOfPrevLine;
         if (previousLineLength >= 0) {
-            int minOffset = (previousLineLength < currentCollumn) ? previousLineLength : currentCollumn;
+            int minOffset = (previousLineLength < currentColumn) ? previousLineLength : currentColumn;
             int newCursorOffset = startOfPrevLine + minOffset;
             while ( (editor->textBuffer->input[newCursorOffset] & 0xC0) == 0x80) {
                 newCursorOffset--;
             }
             editor->textBuffer->cursorByteOffset = newCursorOffset;
-            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+                editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            }
         }
     }
 
     if (IsKeyPressed(KEY_DOWN)) {
         int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
-        int currentCollumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
+        int currentColumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
 
         int endOfCurrentLine = GetLineEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
 
@@ -396,13 +445,15 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
         int nextLineEnd = GetLineEnd(editor->textBuffer->input, startOfNextLine, editor->textBuffer->size);
         int nextLineLength = nextLineEnd - startOfNextLine;
         if (nextLineLength >= 0) {
-            int minOffset = (nextLineLength < currentCollumn) ? nextLineLength : currentCollumn;
+            int minOffset = (nextLineLength < currentColumn) ? nextLineLength : currentColumn;
             int newCursorOffset = startOfNextLine + minOffset;
             while ( (editor->textBuffer->input[newCursorOffset] & 0xC0) == 0x80) {
                 newCursorOffset--;
             }
             editor->textBuffer->cursorByteOffset = newCursorOffset;
-            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+                editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            }
         }
     }
 
@@ -412,26 +463,33 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
     }
 
     // copy
-    // TODO
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_C)) {
         int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
-        char *highlightedText = &editor->textBuffer->input[start] + end;
-        printf("---------------------------------------------------------\n");
-        printf("anchor: %d, cursor: %d\n", editor->textBuffer->selectionAnchor, editor->textBuffer->cursorByteOffset);
-        printf("start: %d, end: %d\n", start, end);
-        printf("text buffer: %s\n", editor->textBuffer->input);
-        printf("highlightedText: %s\n", highlightedText);
-        printf("---------------------------------------------------------\n");
-        SetClipboardText(editor->textBuffer->input);
+
+        if (start != end) {
+            size_t size = end - start;
+            size_t usedBeforeCopy = arena->used;
+
+            char *highlightedText = (char *)ArenaAlloc(arena, size + 1);
+            memcpy(highlightedText, &editor->textBuffer->input[start], size);
+
+            highlightedText[size] = '\0';
+
+            SetClipboardText(highlightedText);
+
+            arena->used = usedBeforeCopy;
+        }
     }
 
     // paste
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
         const char *clipboardText = GetClipboardText();
-        size_t pastedSize = safe_strlen(clipboardText, editor->textBuffer->capacity);
 
-        InsertBytes(editor->textBuffer, arena, clipboardText, pastedSize);
+        if (clipboardText != NULL) {
+            size_t pastedSize = strlen(clipboardText);
+            InsertBytes(editor->textBuffer, arena, clipboardText, pastedSize);
+        }
     }
 }
 
@@ -488,6 +546,39 @@ int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize) {
     }
 
     return bufferSize;
+}
+
+int GetWordStart(char *buffer, int currentOffset) {
+    if (currentOffset <= 0) return 0;
+
+    int scanIndex = currentOffset;
+
+    while(scanIndex > 0 && (buffer[scanIndex - 1] == ' ' || buffer[scanIndex - 1] == '\n')) {
+        scanIndex --;
+    }
+
+    while(scanIndex > 0 && (buffer[scanIndex - 1] != ' ' && buffer[scanIndex - 1] != '\n')) {
+        scanIndex --;
+    }
+
+    return scanIndex;
+}
+
+int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize) {
+    if (currentOffset < 0) return 0;
+    if (bufferSize < currentOffset) return 0;
+
+    int scanIndex = currentOffset;
+
+    while(scanIndex < bufferSize && (buffer[scanIndex] != ' ' && buffer[scanIndex] != '\n')) {
+        scanIndex ++;
+    }
+
+    while(scanIndex < bufferSize && (buffer[scanIndex] == ' ' || buffer[scanIndex] == '\n')) {
+        scanIndex ++;
+    }
+
+    return scanIndex;
 }
 
 int GetPreviousCharSize(char *buffer, int currentOffset) {
