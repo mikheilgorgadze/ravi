@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <raylib.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -9,6 +8,10 @@
 #include <string.h>
 #include "lib/tinyfiledialogs.h"
 #include "buffer.h"
+#include "lexer.h"
+#include "resources/fonts/firacode.h"
+#include "resources/fonts/notosans.h"
+#include "resources/logo.h"
 
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
@@ -26,38 +29,69 @@
 #define MAX_INPUT_CHAR 100000
 #define FONT_SIZE 40
 #define PADDING 40
-#define GUTTER_WIDTH 100
+#define GUTTER_WIDTH 150
 #define TEXT_OFFSET_X 5
 #define TEXT_OFFSET_Y 5
 #define TEXT_ARENA_SIZE 100 * 1024 * 1024
 
 #define FONT_SANS "resources/fonts/NotoSansGeorgian-Regular.ttf"
-#define FONT_MONO "resources/fonts/FiraCode-Medium.ttf"
+#define FONT_MONO "resources/fonts/FiraCode-Regular.ttf"
 
 typedef struct {
     const char* title;
     const int width;
     const int height;
     char currentFilePath[1024];
+    long lastModificationTime;
     int codepointSize;
     int frameCounter;
     float scrollOffset;
-    float cursorLayoutY;
     float totalContentHeight;
+
+    SyntaxToken *syntaxTokens;
+    int tokenCount;
+    int tokenCapacity;
+
     bool isSearchingCursor;
+    bool isScrolling;
     bool mouseOnText;
+    bool isUpdateNeeded;
     Font font;
+    Font fallbackFont;
     Vector2 cursorPosition;
     TextBuffer *textBuffer;
     Rectangle gutter;
     Rectangle textBox;
 } Editor;
 
+Keyword keywords[] = {
+    {.name = "int",     .color = DARKGREEN},
+    {.name = "float",   .color = DARKGREEN},
+    {.name = "long",    .color = DARKGREEN},
+    {.name = "char",    .color = DARKGREEN},
+    {.name = "void",    .color = DARKGREEN},
+    {.name = "bool",    .color = PURPLE},
+    {.name = "typedef", .color = RED},
+    {.name = "struct",  .color = RED},
+    {.name = "const",  .color = RED},
+    {.name = "#include",  .color = RED},
+    {.name = "#define",  .color = RED},
+    {.name = "if",  .color = RED},
+	{.name = "else",  .color = RED},
+    {.name = "while",  .color = RED},
+    {.name = "for",  .color = RED},
+    {.name = "static",  .color = RED},
+    {.name = "string_literal", .color = GREEN},
+    {.name = "single_quotes", .color = ORANGE},
+    {.name = "comment", .color = GRAY},
+    {0},
+};
+
 void RenderText(Editor *editor);
-void UpdateEditor(Editor* editor, Arena *arena);
+void UpdateEditor(Editor* editor, Arena *arena, Clay_ElementData elementData);
 void HandleScroll(Editor *editor);
 void HandleKeyboardInput(Editor *editor, Arena *arena);
-void HandleMouseEvents(Editor *editor, Arena *arena);
+void HandleMouseEvents(Editor *editor, Arena *arena, Clay_ElementData elementData);
 int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY);
 int min(int x, int y);
 int max(int x, int y);
@@ -66,6 +100,7 @@ void HandleFileDrop(Editor *editor, Arena *arena);
 void ClearEditor(Editor *editor);
 void LoadFileInEditor(const char *fileName, Editor *editor, Arena *arena);
 void HandleFileOpen(Editor *editor, Arena *arena);
+Font* GetFontForCodepoint(Editor *editor, int codepoint);
 
 Font gutterFont;
 
@@ -88,13 +123,138 @@ bool MenuElementComponent(Clay_String text, Clay_String id, int *cursor) {
     return clicked;
 }
 
-int main(void) {
+void RenderScrollbar(Editor *editor, Clay_ElementData elementData) {
+    if (!elementData.found) return;
+
+    if (editor->totalContentHeight > editor->textBox.height) {
+        Rectangle rec = (Rectangle) {
+            .height = (editor->textBox.height / editor->totalContentHeight) * elementData.boundingBox.height,
+            .width = elementData.boundingBox.width,
+            .x = elementData.boundingBox.x,
+            .y = elementData.boundingBox.y + (editor->scrollOffset / editor->totalContentHeight * elementData.boundingBox.height)
+        };
+
+        DrawRectangleRounded(rec, 0.5, 1, GRAY);
+    }
+}
+
+bool isSeparator(int codepoint) {
+    static bool table[256] = {false};
+    static bool initialized = false;
+
+    if (!initialized) {
+        table[' '] = true;
+        table['\n'] = true;
+        table['\t'] = true;
+        table['{'] = true;
+        table['}'] = true;
+        table['['] = true;
+        table[']'] = true;
+        table['('] = true;
+        table[')'] = true;
+        table[';'] = true;
+        table[','] = true;
+        table['.'] = true;
+        table['\''] = true;
+        table['\"'] = true;
+        table['='] = true;
+        table['-'] = true;
+        table['+'] = true;
+        table['*'] = true;
+        table['/'] = true;
+        table['&'] = true;
+        table['|'] = true;
+
+        initialized = true;
+    }
+
+    if (codepoint >= 0 && codepoint < 256) {
+        return table[codepoint];
+    }
+
+    return false;
+}
+
+void HandelFileSave(Editor *editor) {
+    char *targetPath = NULL;
+    if (editor->currentFilePath[0] == '\0' || editor->lastModificationTime != GetFileModTime(editor->currentFilePath)) {
+        const char *defaultName = "new_file.txt";
+        const char *selectedPath = tinyfd_saveFileDialog("Choose file to save", defaultName, 0, NULL, NULL);
+        if (selectedPath != NULL) {
+            targetPath = strncpy(editor->currentFilePath, selectedPath, 1024);
+        }
+    } else {
+        targetPath = editor->currentFilePath;
+    }
+
+    if (targetPath!=NULL) {
+        bool saved = SaveFileData(targetPath, editor->textBuffer->input, editor->textBuffer->size);
+        if (!saved) {
+            printf("file not saved!\n");
+        }
+
+        if (editor->textBuffer->size > 0) {
+            editor->textBuffer->isSaved = true;
+            editor->lastModificationTime = GetFileModTime(targetPath);
+        }
+    }
+}
+
+void Copy(Editor *editor, Arena *arena, int start, int end) {
+    if (start != end) {
+        size_t size = end - start;
+        size_t usedBeforeCopy = arena->used;
+
+        char *highlightedText = (char *)ArenaAlloc(arena, size + 1);
+        memcpy(highlightedText, &editor->textBuffer->input[start], size);
+
+        highlightedText[size] = '\0';
+
+        SetClipboardText(highlightedText);
+
+        arena->used = usedBeforeCopy;
+    }
+}
+
+void UpdateCursorPosition(Editor *editor) {
+    int i = 0;
+    for (i = 0; i < editor->textBuffer->rowCount; i++) {
+        if (i == editor->textBuffer->rowCount - 1) break;
+        if (editor->textBuffer->cursorByteOffset < editor->textBuffer->rowStarts[i + 1]) {
+            break;
+        }
+    }
+    editor->cursorPosition.y = TEXT_OFFSET_Y + (i * FONT_SIZE);
+
+    int currentX = TEXT_OFFSET_X;
+
+    int j = editor->textBuffer->rowStarts[i];
+    int codepointSize;
+    int codepoint;
+    while (j < editor->textBuffer->cursorByteOffset) {
+        codepoint = GetCodepoint(&editor->textBuffer->input[j], &codepointSize);
+        if (codepoint == '\n') break;
+        if (codepoint == '\t') {
+            int index = GetGlyphIndex(editor->font, ' ');
+            int spaceWidth = editor->font.glyphs[index].advanceX;
+            int advance = (4 - ((int) (currentX / spaceWidth) % 4)) * spaceWidth;
+            currentX += advance;
+        } else {
+            Font *font = GetFontForCodepoint(editor, codepoint);
+            int glyphIndex = GetGlyphIndex(*font, codepoint);
+            currentX += font->glyphs[glyphIndex].advanceX;
+        }
+        j += codepointSize;
+    }
+    editor->cursorPosition.x = currentX;
+}
+
+int main(int argc, char *argv[]) {
     Arena textInputArena = (Arena) {
         .memory = malloc(TEXT_ARENA_SIZE),
         .used = 0,
         .capacity = TEXT_ARENA_SIZE
     };
-
 
     const char * activeFontName = FONT_SANS;
 
@@ -117,9 +277,9 @@ int main(void) {
         .codepointSize = 0,
         .frameCounter = 0,
         .scrollOffset = 0.0,
-        .cursorLayoutY = 0.0,
         .isSearchingCursor = false,
         .mouseOnText = false,
+        .isUpdateNeeded = true,
         .textBuffer = &textBuffer,
         .gutter = {
             .x = 0, .y = 0, .width = 0, .height = 0
@@ -129,20 +289,28 @@ int main(void) {
         },
     };
     editor.currentFilePath[0] = '\0';
+    
+    editor.syntaxTokens = (SyntaxToken *) ArenaAlloc(&textInputArena, MAX_INPUT_CHAR * (sizeof(SyntaxToken)));
 
-    int codepoints[512];
-    int codepintCount = 0;
+    int codepointsASCII[256];
+    int codepointCountASCII = 0;
+
+    int codepointsGeo[256];
+    int codepointCountGeo = 0;
 
     //add ascii unicode character range to codepoints
-    for (int i = 32; i < 127; i++) codepoints[codepintCount++] = i;
+    for (int i = 32; i < 127; i++) codepointsASCII[codepointCountASCII++] = i;
 
     //add georgian unicode character range to codepoints
-    for (int i = 0x10A0; i < 0x10FF; i++) codepoints[codepintCount++] = i;
+    for (int i = 0x10A0; i < 0x10FF; i++) codepointsGeo[codepointCountGeo++] = i;
 
 
     SetTargetFPS(60);
     Clay_Raylib_Initialize(editor.width, editor.height, editor.title, FLAG_WINDOW_RESIZABLE);
     SetExitKey(0);
+
+    Image icon = LoadImageFromMemory(".png", edit_png, edit_png_len);
+    SetWindowIcon(icon);
 
     uint64_t clayRequiredMemory = Clay_MinMemorySize();
     Clay_Arena clayMemory = (Clay_Arena) {
@@ -152,15 +320,23 @@ int main(void) {
 
     Clay_Initialize(clayMemory, (Clay_Dimensions) {.width = GetScreenWidth(), .height = GetScreenHeight()}, (Clay_ErrorHandler) {});
 
-    editor.font = LoadFontEx(activeFontName, FONT_SIZE, codepoints, codepintCount);
+    editor.font = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
     SetTextureFilter(editor.font.texture, TEXTURE_FILTER_BILINEAR);
-    gutterFont = LoadFont(FONT_MONO);
+
+    editor.fallbackFont = LoadFontFromMemory(".ttf", NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, FONT_SIZE, codepointsGeo, codepointCountGeo);
+    SetTextureFilter(editor.fallbackFont.texture, TEXTURE_FILTER_BILINEAR);
+
+    gutterFont = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
     SetTextureFilter(gutterFont.texture, TEXTURE_FILTER_BILINEAR);
 
-    Font fonts[2] = {editor.font, gutterFont};
 
-    bool fileDropped = false;
-    //Clay_SetDebugModeEnabled(true);
+    Font fonts[3] = {editor.font, editor.fallbackFont, gutterFont};
+
+    if (argc > 1) {
+        LoadFileInEditor(argv[1], &editor, &textInputArena);
+    }
+
+
     while(!WindowShouldClose()) {
         int cursor = MOUSE_CURSOR_DEFAULT;
 
@@ -182,8 +358,7 @@ int main(void) {
                     HandleFileOpen(&editor, &textInputArena);
                 };
                 if (MenuElementComponent(CLAY_STRING("Save File"), CLAY_STRING("FileSave"), &cursor)) {
-                    //TODO Implement later
-                    //HandleFileSave(&editor, &textInputArena);
+                    HandelFileSave(&editor);
                 }
             }
 
@@ -193,7 +368,15 @@ int main(void) {
                     .height = CLAY_SIZING_GROW(0)}, .padding = CLAY_PADDING_ALL(16), .childGap = 16}, .backgroundColor = GUTTER_COLOR_CLAY}){}
 
                 CLAY(CLAY_ID("TextBox"), {.layout = {.sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)}}, 
-                     .backgroundColor = LIGHT_GRAY_CLAY}){}
+                     .backgroundColor = DARK_GRAY_CLAY}){}
+
+                CLAY(CLAY_ID("ScrollBar"), {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(40), .height = CLAY_SIZING_GROW(0)},
+                     .padding = CLAY_PADDING_ALL(10)},
+                     .backgroundColor = GUTTER_COLOR_CLAY, .border = 11}){
+                    if (Clay_Hovered()) {
+                        cursor = MOUSE_CURSOR_POINTING_HAND;
+                    }
+                }
             }
 
         };
@@ -202,6 +385,8 @@ int main(void) {
 
         Clay_ElementData textBoxData =  Clay_GetElementData(Clay_GetElementId(CLAY_STRING("TextBox")));
         Clay_ElementData gutterData =  Clay_GetElementData(Clay_GetElementId(CLAY_STRING("Gutter")));
+        Clay_ElementData scrollBarData = Clay_GetElementData(Clay_GetElementId(CLAY_STRING("ScrollBar")));
+
         editor.textBox.x = textBoxData.boundingBox.x;
         editor.textBox.y = textBoxData.boundingBox.y;
         editor.textBox.width = textBoxData.boundingBox.width;
@@ -212,7 +397,7 @@ int main(void) {
         editor.gutter.width = gutterData.boundingBox.width;
         editor.gutter.height = gutterData.boundingBox.height;
 
-        UpdateEditor(&editor, &textInputArena);
+        UpdateEditor(&editor, &textInputArena, scrollBarData);
 
         if (cursor == MOUSE_CURSOR_DEFAULT && editor.mouseOnText) {
             cursor = MOUSE_CURSOR_IBEAM;
@@ -223,16 +408,40 @@ int main(void) {
         BeginDrawing();
         Clay_Raylib_Render(renderCommands, fonts);
 
-        UpdateTextLayout(&editor, &textInputArena);
+        if (IsWindowResized()) {
+            editor.isUpdateNeeded = true;
+        }
+
+        if (editor.isUpdateNeeded) {
+            CalculateSyntaxHighlights(&textBuffer, keywords, editor.syntaxTokens, &editor.tokenCount);
+            UpdateTextLayout(&editor, &textInputArena);
+            editor.isUpdateNeeded = false;
+        }
+        UpdateCursorPosition(&editor);
+
         RenderText(&editor);
+        RenderScrollbar(&editor, scrollBarData);
 
         HandleFileDrop(&editor, &textInputArena);
 
-        if (!editor.textBuffer->isSaved) {
-            SetWindowTitle("Ravi Editor *");
-        } else {
-            SetWindowTitle("Ravi Editor");
+        if (!IsWindowFocused()) {
+            long fileModTime = GetFileModTime(editor.currentFilePath);
+            char currentFilePath[1024] = {0};
+            if (editor.currentFilePath[0] != '\0' && fileModTime > editor.lastModificationTime) {
+                strncpy(currentFilePath, editor.currentFilePath, 1024);
+                ClearEditor(&editor);
+                LoadFileInEditor(currentFilePath, &editor, &textInputArena);
+                editor.lastModificationTime = fileModTime;
+            }
         }
+
+        if (editor.currentFilePath[0] != '\0') {
+            const char* fileName = GetFileName(editor.currentFilePath);
+            editor.textBuffer->isSaved ? SetWindowTitle(fileName): SetWindowTitle(TextFormat("%s *", fileName));
+        } else {
+            editor.textBuffer->isSaved ? SetWindowTitle("Ravi Editor") : SetWindowTitle("Ravi Editor *");
+        }
+
 
         EndDrawing();
     }
@@ -242,7 +451,7 @@ int main(void) {
     return 0;
 }
 
-void UpdateEditor(Editor* editor, Arena *arena) {
+void UpdateEditor(Editor* editor, Arena *arena, Clay_ElementData elementData) {
     HandleScroll(editor);
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_F)) {
@@ -250,21 +459,15 @@ void UpdateEditor(Editor* editor, Arena *arena) {
     }
 
     HandleKeyboardInput(editor, arena);
-    HandleMouseEvents(editor, arena);
+    HandleMouseEvents(editor, arena, elementData);
 
-    if (editor->mouseOnText) {
-        editor->frameCounter++;
-        //SetMouseCursor(MOUSE_CURSOR_IBEAM);
-        int key = GetCharPressed();
+    editor->frameCounter++;
+    int key = GetCharPressed();
 
-        while (key > 0) {
-            InsertCharacter(editor->textBuffer, arena, key);
-            key = GetCharPressed();
-        }
-
-    } else {
-        editor->frameCounter = 0;
-        //SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+    while (key > 0) {
+        InsertCharacter(editor->textBuffer, arena, key);
+        editor->isUpdateNeeded = true;
+        key = GetCharPressed();
     }
 }
 
@@ -277,7 +480,7 @@ void DrawCursor(Editor *editor, Vector2 position) {
     };
 
     if (editor->frameCounter/20 % 2 == 0) {
-        DrawRectangleRec(cursor, BLACK);
+        DrawRectangleRec(cursor, WHITE);
     }
 }
 
@@ -290,6 +493,9 @@ void RenderText(Editor *editor) {
     };
 
     DrawCursor(editor, cursorScreenPosition);
+
+    Color currentColor = WHITE;
+
 
     BeginScissorMode((int)editor->textBox.x, (int)editor->textBox.y, (int)editor->textBox.width, (int)editor->textBox.height);
     for (int i = 0; i < editor->textBuffer->rowCount; i++) {
@@ -308,6 +514,7 @@ void RenderText(Editor *editor) {
         while (start < end) {
             char *ptr = buffer->input + start;
             int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
+            Font *font = GetFontForCodepoint(editor, nextCodePoint);
 
             if (nextCodePoint == '\n') {
                 start += editor->codepointSize;
@@ -319,11 +526,17 @@ void RenderText(Editor *editor) {
                 .y = rowY
             };
 
-            int index = GetGlyphIndex(editor->font, nextCodePoint);
-            int charWidth = editor->font.glyphs[index].advanceX;
+            int index = GetGlyphIndex(*font, nextCodePoint);
+            int charWidth = font->glyphs[index].advanceX;
 
             if (start >= highlightStart && start < highlightEnd) {
-                DrawRectangle(charPosition.x, charPosition.y, charWidth, FONT_SIZE, SKYBLUE);
+                Rectangle highilightRec = (Rectangle) {
+                    .x = charPosition.x,
+                    .y = charPosition.y,
+                    .width = charWidth,
+                    .height = FONT_SIZE
+                };
+                DrawRectangleRec(highilightRec, ORANGE);
             }
 
             if (nextCodePoint == '\t') {
@@ -331,8 +544,15 @@ void RenderText(Editor *editor) {
                 int spaceWidth = editor->font.glyphs[index].advanceX;
                 int advance = (4 - ((int) (currentX / spaceWidth) % 4)) * spaceWidth;
                 currentX += advance;
-            } else {
-                DrawTextCodepoint(editor->font, nextCodePoint, charPosition, FONT_SIZE, BLACK);
+            } else {    
+                currentColor = WHITE;
+                for (int i = 0; i < editor->tokenCount; i++) {
+                    if (start >= editor->syntaxTokens[i].start && start < editor->syntaxTokens[i].end) {
+                        currentColor = editor->syntaxTokens[i].keyword.color;
+                        break;
+                    }
+                }
+                DrawTextCodepoint(*font, nextCodePoint, charPosition, FONT_SIZE, currentColor);
                 currentX += charWidth;
             }
 
@@ -375,10 +595,10 @@ void HandleScroll(Editor *editor) {
         editor->scrollOffset = 0;
     }
     if (editor->isSearchingCursor) {
-        if ( editor->cursorLayoutY + FONT_SIZE > (editor->scrollOffset + editor->textBox.height)) {
-            editor->scrollOffset = (editor->cursorLayoutY + FONT_SIZE) - editor->textBox.height;
-        } else if (editor->cursorLayoutY < editor->scrollOffset) {
-            editor->scrollOffset = editor->cursorLayoutY;
+        if ( editor->cursorPosition.y + FONT_SIZE > (editor->scrollOffset + editor->textBox.height)) {
+            editor->scrollOffset = (editor->cursorPosition.y + FONT_SIZE) - editor->textBox.height;
+        } else if (editor->cursorPosition.y < editor->scrollOffset) {
+            editor->scrollOffset = editor->cursorPosition.y;
         }
     }
 }
@@ -398,13 +618,10 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
                 editor->textBuffer->selectionAnchor = 0;
             }
         } else {
-            int cursorBeforeCtrl = editor->textBuffer->cursorByteOffset;
-
             int charSize = GetPreviousCharSize(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
             editor->textBuffer->cursorByteOffset -= charSize;
 
             int wordStart = GetWordStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
-            int wordEnd = GetWordEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
             if (IsKeyDown(KEY_LEFT_CONTROL)) {
                 editor->textBuffer->cursorByteOffset = wordStart;
             }
@@ -419,10 +636,8 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
         int byteSize = 0;
         GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
 
-        int cursorBeforeCtrl = editor->textBuffer->cursorByteOffset;
         editor->textBuffer->cursorByteOffset += byteSize;
 
-        int wordStart = GetWordStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
         int wordEnd = GetWordEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
         if (IsKeyDown(KEY_LEFT_CONTROL)) {
             editor->textBuffer->cursorByteOffset = wordEnd;
@@ -486,11 +701,13 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
     if (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER)) {
         editor->isSearchingCursor = true;
         InsertCharacter(editor->textBuffer, arena, '\n');
+        editor->isUpdateNeeded = true;
     }
 
     if (IsKeyPressed(KEY_TAB) || IsKeyPressedRepeat(KEY_TAB)) {
         editor->isSearchingCursor = true;
         InsertCharacter(editor->textBuffer, arena, '\t');
+        editor->isUpdateNeeded = true;
     }
 
     if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
@@ -500,9 +717,10 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
             int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
 
             DeleteRange(editor->textBuffer, start, end);
-
+            editor->isUpdateNeeded = true;
         } else {
             DeleteCharacter(editor->textBuffer);
+            editor->isUpdateNeeded = true;
         }
     }
 
@@ -513,12 +731,15 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
             int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
 
             DeleteRange(editor->textBuffer, start, end);
+            editor->isUpdateNeeded = true;
         } else {
             if (editor->textBuffer->cursorByteOffset >= editor->textBuffer->size) return;
 
             int byteSize = 0;
             GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
+
             DeleteRange(editor->textBuffer, editor->textBuffer->cursorByteOffset, editor->textBuffer->cursorByteOffset + byteSize);
+            editor->isUpdateNeeded = true;
         }
     }
 
@@ -527,19 +748,7 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
         int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
 
-        if (start != end) {
-            size_t size = end - start;
-            size_t usedBeforeCopy = arena->used;
-
-            char *highlightedText = (char *)ArenaAlloc(arena, size + 1);
-            memcpy(highlightedText, &editor->textBuffer->input[start], size);
-
-            highlightedText[size] = '\0';
-
-            SetClipboardText(highlightedText);
-
-            arena->used = usedBeforeCopy;
-        }
+        Copy(editor, arena, start, end);
     }
 
     // paste
@@ -549,6 +758,20 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
         if (clipboardText != NULL) {
             size_t pastedSize = strlen(clipboardText);
             InsertBytes(editor->textBuffer, arena, clipboardText, pastedSize);
+            editor->isUpdateNeeded = true;
+        }
+    }
+
+    // cut
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_X)) {
+        int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+
+        Copy(editor, arena, start, end);
+
+        if (start != end) {
+            DeleteRange(editor->textBuffer, start, end);
+            editor->isUpdateNeeded = true;
         }
     }
 
@@ -558,27 +781,7 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
     }
     
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
-        char *targetPath = NULL;
-        if (editor->currentFilePath[0] == '\0') {
-            const char *defaultName = "new_file.txt";
-            const char *selectedPath = tinyfd_saveFileDialog("Choose file to save", defaultName, 0, NULL, NULL);
-            if (selectedPath != NULL) {
-                targetPath = strncpy(editor->currentFilePath, selectedPath, 1024);
-            }
-        } else {
-            targetPath = editor->currentFilePath;
-        }
-
-        if (targetPath!=NULL) {
-            bool saved = SaveFileData(targetPath, editor->textBuffer->input, editor->textBuffer->size);
-            if (!saved) {
-                printf("file not saved!\n");
-            }
-
-            if (editor->textBuffer->size > 0) {
-                editor->textBuffer->isSaved = true;
-            }
-        }
+        HandelFileSave(editor);
     }
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_O)) {
@@ -586,7 +789,15 @@ void HandleKeyboardInput(Editor *editor, Arena *arena) {
     }
 }
 
-void HandleMouseEvents(Editor *editor, Arena *arena) {
+void HandleMouseEvents(Editor *editor, Arena *arena, Clay_ElementData elementData) {
+    Rectangle rec = (Rectangle) {
+        .x = elementData.boundingBox.x, 
+        .y = elementData.boundingBox.y,
+        .height = elementData.boundingBox.height,
+        .width = elementData.boundingBox.width
+    };
+    bool isMouseOnScrollbar = CheckCollisionPointRec(GetMousePosition(), rec);
+
     if (CheckCollisionPointRec(GetMousePosition(), editor->textBox)) {
         editor->mouseOnText = true;
     } else {
@@ -599,18 +810,32 @@ void HandleMouseEvents(Editor *editor, Arena *arena) {
     }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
-        editor->textBuffer->cursorByteOffset = index;
-        editor->textBuffer->selectionAnchor = index;
-
-        //if (Clay_PointerOver(Clay_GetElementId(CLAY_STRING("FileOpen"))) ) {
-        //    HandleFileOpen(editor, arena);
-        //}
+        editor->isSearchingCursor = false;
+        if (isMouseOnScrollbar) {
+            editor->isScrolling = true;
+        } else {
+            editor->isScrolling = false;
+            int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
+            editor->textBuffer->cursorByteOffset = index;
+            editor->textBuffer->selectionAnchor = index;
+        }
     }
 
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-        int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
-        editor->textBuffer->cursorByteOffset = index;
+        if (editor->isScrolling) {
+            float relativePos = GetMouseY() - elementData.boundingBox.y;
+            float percentage = relativePos / elementData.boundingBox.height;
+            float maxScroll = max((editor->totalContentHeight - editor->textBox.height), 0);
+            float targetScroll = max(editor->totalContentHeight * percentage, 0);
+            editor->scrollOffset = min(targetScroll, maxScroll);
+        } else {
+            int index = GetIndexFromMouse(editor, GetMouseX(), GetMouseY());
+            editor->textBuffer->cursorByteOffset = index;
+        }
+    }
+
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+        editor->isScrolling = false;
     }
 }
 
@@ -637,6 +862,8 @@ int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY) {
 
         int byteSize = 0;
         int codePoint = GetCodepoint(&input[i], &byteSize);
+        Font *font = GetFontForCodepoint(editor, codePoint);
+
         int charWidth = 0;
 
         if (codePoint == '\t') {
@@ -644,8 +871,8 @@ int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY) {
             int spaceWidth = editor->font.glyphs[index].advanceX;
             charWidth = (4 - ((int)((currentPixelWidth - (editor->textBox.x)) / spaceWidth) % 4)) * spaceWidth;
         } else {
-            int index = GetGlyphIndex(editor->font, codePoint);
-            charWidth = editor->font.glyphs[index].advanceX;
+            int index = GetGlyphIndex(*font, codePoint);
+            charWidth = font->glyphs[index].advanceX;
         }
 
         if (mouseX < currentPixelWidth + (charWidth / 2)) {
@@ -680,6 +907,7 @@ void UpdateTextLayout(Editor *editor, Arena *arena) {
 
     while (running) {
         int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
+        Font *font = GetFontForCodepoint(editor, nextCodePoint);
 
         if (nextCodePoint == '\0') {
             running = false; 
@@ -690,8 +918,8 @@ void UpdateTextLayout(Editor *editor, Arena *arena) {
         bool isTab = (nextCodePoint == '\t');
 
         if (nextCodePoint != '\0') {
-            int index = GetGlyphIndex(editor->font, nextCodePoint);
-            charWidth = editor->font.glyphs[index].advanceX;
+            int index = GetGlyphIndex(*font, nextCodePoint);
+            charWidth = font->glyphs[index].advanceX;
         }
 
         if (!isNewLine && nextCodePoint != '\0' && (layoutCursor.x + charWidth > editor->textBox.width)) {
@@ -699,12 +927,9 @@ void UpdateTextLayout(Editor *editor, Arena *arena) {
             layoutCursor.y += FONT_SIZE;
 
             int currentIndex = (int) (ptr - editor->textBuffer->input);
-            PushRowStarts(editor->textBuffer, arena, currentIndex);
-        }
-
-        if (ptr == editor->textBuffer->input + editor->textBuffer->cursorByteOffset) {
-            editor->cursorPosition = layoutCursor;
-            editor->cursorLayoutY = layoutCursor.y;
+            if (editor->textBuffer->rowCount < editor->textBuffer->rowCapacity) {
+                PushRowStarts(editor->textBuffer, arena, currentIndex);
+            }
         }
 
         if (nextCodePoint == '\0') break;
@@ -714,7 +939,9 @@ void UpdateTextLayout(Editor *editor, Arena *arena) {
             layoutCursor.y += FONT_SIZE;
 
             int nextIndex = (int) (ptr - editor->textBuffer->input) + 1;
-            PushRowStarts(editor->textBuffer, arena, nextIndex);
+            if (editor->textBuffer->rowCount < editor->textBuffer->rowCapacity) {
+                PushRowStarts(editor->textBuffer, arena, nextIndex);
+            }
         } else if (isTab) {
             int index = GetGlyphIndex(editor->font, ' ');
             int spaceWidth = editor->font.glyphs[index].advanceX;
@@ -759,6 +986,8 @@ void LoadFileInEditor(const char *fileName, Editor *editor, Arena *arena) {
         InsertBytes(editor->textBuffer, arena, (char *) fileData, size);
         strncpy(editor->currentFilePath, fileName, 1024);
         UnloadFileData(fileData);
+        editor->lastModificationTime = GetFileModTime(fileName);
+        editor->isUpdateNeeded = true;
     }
 }
 
@@ -775,4 +1004,13 @@ void ClearEditor(Editor *editor) {
     editor->totalContentHeight = 0;
 
     editor->textBuffer->isSaved = true;
+    editor->isUpdateNeeded = true;
+}
+
+Font* GetFontForCodepoint(Editor *editor, int codepoint) {
+    if (codepoint >= 0x10A0 && codepoint <= 0x10FF) {
+        return &editor->fallbackFont;
+    }
+
+    return &editor->font;
 }

@@ -190,7 +190,7 @@ int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize) {
 }
 
 //copied from raylib's implementation
-const char *CodepointToUTF8(int codepoint, int *utf8Size) {
+const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size) {
     static char utf8[6] = { 0 };
     memset(utf8, 0, 6); // Clear static array
     int size = 0;       // Byte size of codepoint
@@ -229,7 +229,7 @@ const char *CodepointToUTF8(int codepoint, int *utf8Size) {
 
 void InsertCharacter(TextBuffer *buffer, Arena *arena, int key) {
     int byteSize = 0;
-    const char *utf8Symbol = CodepointToUTF8(key, &byteSize);
+    const char *utf8Symbol = CodepointToUTF8_Buffer(key, &byteSize);
     InsertBytes(buffer, arena, utf8Symbol, byteSize);
 }
 

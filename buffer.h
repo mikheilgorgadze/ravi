@@ -36,7 +36,7 @@ int GetLineStart(char *buffer, int currentOffset);
 int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize);
 int GetWordStart(char *buffer, int currentOffset);
 int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize);
-const char *CodepointToUTF8(int codepoint, int *utf8Size);
+const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size);
 void InsertCharacter(TextBuffer *buffer, Arena *arena, int key);
 
 #endif
