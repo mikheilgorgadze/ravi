@@ -27,5 +27,6 @@ For this project I tried to use very few external libraries. They are:
 - Save file with `Ctrl` + `S` combo or through save file dialog
 - Window title shows unsaved state and file name if opened
 - Ability to detect if opened file was changed externally and reload it
+- Supports zoom in and out with `Ctrl` + `Mouse Scroll` combo
 
 ![Editor screenshot](resources/screenshot.png)

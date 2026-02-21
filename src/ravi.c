@@ -27,7 +27,6 @@
 #define COLOR_ORANGE {255, 255, 0, 255}
 
 #define MAX_INPUT_CHAR 100000
-#define FONT_SIZE 40
 #define PADDING 40
 #define GUTTER_WIDTH 150
 #define TEXT_OFFSET_X 5
@@ -40,14 +39,21 @@
 
 typedef struct {
     const char* title;
-    const int width;
-    const int height;
+    int width;
+    int height;
     char currentFilePath[1024];
     long lastModificationTime;
     int codepointSize;
     int frameCounter;
+    int fontSize;
     float scrollOffset;
     float totalContentHeight;
+
+    int codepointsASCII[256];
+    int codepointsCountASCII;
+
+    int codepointsGeo[256];
+    int codepointsCountGeo;
 
     SyntaxTokenList syntaxTokens;
 
@@ -106,10 +112,12 @@ bool IsSeparator(int codepoint);
 void HandelFileSave(Editor *editor);
 void Copy(Editor *editor, int start, int end);
 void UpdateCursorPosition(Editor *editor);
+void HandleFontLoad(Font *currentFont, const unsigned char *fileData, int dataSize, int fontSize, int *codepoints, int codepointCount);
 
 Font gutterFont;
 
 int main(int argc, char *argv[]) {
+
     Arena textInputArena = (Arena) {
         .memory = malloc(TEXT_ARENA_SIZE / 2),
         .used = 0,
@@ -136,6 +144,9 @@ int main(int argc, char *argv[]) {
         .title = "Ravi Editor",
         .width = 1920,
         .height = 1200,
+        .codepointsCountASCII = 0,
+        .codepointsCountGeo = 0,
+        .fontSize = 40,
         .codepointSize = 0,
         .frameCounter = 0,
         .scrollOffset = 0.0,
@@ -153,17 +164,17 @@ int main(int argc, char *argv[]) {
     editor.currentFilePath[0] = '\0';
     
 
-    int codepointsASCII[256];
-    int codepointCountASCII = 0;
+    //int codepointsASCII[256];
+    //int codepointCountASCII = 0;
 
-    int codepointsGeo[256];
-    int codepointCountGeo = 0;
+    //int codepointsGeo[256];
+    //int codepointCountGeo = 0;
 
     //add ascii unicode character range to codepoints
-    for (int i = 32; i < 127; i++) codepointsASCII[codepointCountASCII++] = i;
+    for (int i = 32; i < 127; i++) editor.codepointsASCII[editor.codepointsCountASCII++] = i;
 
     //add georgian unicode character range to codepoints
-    for (int i = 0x10A0; i < 0x10FF; i++) codepointsGeo[codepointCountGeo++] = i;
+    for (int i = 0x10A0; i < 0x10FF; i++) editor.codepointsGeo[editor.codepointsCountGeo++] = i;
 
 
     SetTargetFPS(60);
@@ -181,17 +192,16 @@ int main(int argc, char *argv[]) {
 
     Clay_Initialize(clayMemory, (Clay_Dimensions) {.width = GetScreenWidth(), .height = GetScreenHeight()}, (Clay_ErrorHandler) {});
 
-    editor.font = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
-    SetTextureFilter(editor.font.texture, TEXTURE_FILTER_BILINEAR);
+    HandleFontLoad(&editor.font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
+    HandleFontLoad(&gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
+    HandleFontLoad(&editor.fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor.fontSize, editor.codepointsGeo, editor.codepointsCountGeo);
+    //editor.fallbackFont = LoadFontFromMemory(".ttf", NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, FONT_SIZE, codepointsGeo, codepointCountGeo);
+    //SetTextureFilter(editor.fallbackFont.texture, TEXTURE_FILTER_ANISOTROPIC_16X);
 
-    editor.fallbackFont = LoadFontFromMemory(".ttf", NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, FONT_SIZE, codepointsGeo, codepointCountGeo);
-    SetTextureFilter(editor.fallbackFont.texture, TEXTURE_FILTER_BILINEAR);
-
-    gutterFont = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
-    SetTextureFilter(gutterFont.texture, TEXTURE_FILTER_BILINEAR);
+    //gutterFont = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
+    //SetTextureFilter(gutterFont.texture, TEXTURE_FILTER_ANISOTROPIC_16X);
 
 
-    Font fonts[3] = {editor.font, editor.fallbackFont, gutterFont};
 
     if (argc > 1) {
         LoadFileInEditor(argv[1], &editor);
@@ -201,6 +211,7 @@ int main(int argc, char *argv[]) {
     while(!WindowShouldClose()) {
         int cursor = MOUSE_CURSOR_DEFAULT;
 
+        Font fonts[3] = {editor.font, editor.fallbackFont, gutterFont};
         Clay_Vector2 mousePosition = {.x = GetMouseX(), .y = GetMouseY()}; 
         Clay_SetPointerState(mousePosition, true);
 
@@ -286,6 +297,7 @@ int main(int argc, char *argv[]) {
             editor.isUpdateNeeded = false;
         }
         UpdateCursorPosition(&editor);
+        HandleScroll(&editor);
 
         RenderText(&editor);
         RenderScrollbar(&editor, scrollBarData);
@@ -320,8 +332,6 @@ int main(int argc, char *argv[]) {
 }
 
 void UpdateEditor(Editor* editor, Clay_ElementData elementData) {
-    HandleScroll(editor);
-
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_F)) {
         MaximizeWindow();
     }
@@ -333,14 +343,14 @@ void UpdateEditor(Editor* editor, Clay_ElementData elementData) {
     int key = GetCharPressed();
 
     while (key > 0) {
-        InsertCharacter(editor->textBuffer, key);
-        editor->isUpdateNeeded = true;
-        key = GetCharPressed();
         int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         if (start != end) {
             DeleteRange(editor->textBuffer, start, end);
         }
+        InsertCharacter(editor->textBuffer, key);
+        editor->isUpdateNeeded = true;
+        key = GetCharPressed();
     }
 }
 
@@ -349,7 +359,7 @@ void DrawCursor(Editor *editor, Vector2 position) {
         .x = position.x, 
         .y = position.y, 
         .width = 3, 
-        .height = FONT_SIZE
+        .height = editor->fontSize
     };
 
     if (editor->frameCounter/20 % 2 == 0) {
@@ -374,8 +384,8 @@ void RenderText(Editor *editor) {
 
     int currentTokenIndex = 0;
     for (int i = 0; i < editor->textBuffer->rowList.count; i++) {
-        float rowY = editor->textBox.y + TEXT_OFFSET_Y + (i * FONT_SIZE) - editor->scrollOffset;
-        if (rowY < editor->textBox.y - FONT_SIZE || rowY > editor->textBox.y + editor->textBox.height) {
+        float rowY = editor->textBox.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffset;
+        if (rowY < editor->textBox.y - editor->fontSize || rowY > editor->textBox.y + editor->textBox.height) {
             continue;
         }
 
@@ -409,7 +419,7 @@ void RenderText(Editor *editor) {
                     .x = charPosition.x,
                     .y = charPosition.y,
                     .width = charWidth,
-                    .height = FONT_SIZE
+                    .height = editor->fontSize
                 };
                 DrawRectangleRec(highilightRec, ORANGE);
             }
@@ -427,7 +437,7 @@ void RenderText(Editor *editor) {
                 if (currentTokenIndex < editor->syntaxTokens.count && start >= editor->syntaxTokens.items[currentTokenIndex].start) {
                     currentColor = editor->syntaxTokens.items[currentTokenIndex].keyword.color;
                 }
-                DrawTextCodepoint(*font, nextCodePoint, charPosition, FONT_SIZE, currentColor);
+                DrawTextCodepoint(*font, nextCodePoint, charPosition, editor->fontSize, currentColor);
                 currentX += charWidth;
             }
 
@@ -447,14 +457,14 @@ void RenderText(Editor *editor) {
            lineNumber ++; 
         }
 
-        float y = editor->gutter.y + TEXT_OFFSET_Y + (i * FONT_SIZE) - editor->scrollOffset;
-        if (y < editor->gutter.y - FONT_SIZE || y > editor->gutter.y + editor->gutter.height) {
+        float y = editor->gutter.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffset;
+        if (y < editor->gutter.y - editor->fontSize || y > editor->gutter.y + editor->gutter.height) {
             continue;
         }
 
         if (i == 0 || buffer->input[buffer->rowList.items[i] - 1] == '\n') {
             gutterPos.y = y;
-            DrawTextEx(gutterFont, TextFormat("%d", lineNumber), gutterPos, FONT_SIZE, 1, LIGHTGRAY);
+            DrawTextEx(gutterFont, TextFormat("%d", lineNumber), gutterPos, editor->fontSize, 1, LIGHTGRAY);
         }
 
     }
@@ -470,8 +480,8 @@ void HandleScroll(Editor *editor) {
         editor->scrollOffset = 0;
     }
     if (editor->isSearchingCursor) {
-        if ( editor->cursorPosition.y + FONT_SIZE > (editor->scrollOffset + editor->textBox.height)) {
-            editor->scrollOffset = (editor->cursorPosition.y + FONT_SIZE) - editor->textBox.height;
+        if ( editor->cursorPosition.y + editor->fontSize > (editor->scrollOffset + editor->textBox.height)) {
+            editor->scrollOffset = (editor->cursorPosition.y + editor->fontSize) - editor->textBox.height;
         } else if (editor->cursorPosition.y < editor->scrollOffset) {
             editor->scrollOffset = editor->cursorPosition.y;
         }
@@ -679,9 +689,26 @@ void HandleMouseEvents(Editor *editor, Clay_ElementData elementData) {
         editor->mouseOnText = false;
     }
 
-    if (GetMouseWheelMove() != 0) {
-        editor->scrollOffset -= GetMouseWheelMove() * FONT_SIZE;
-        editor->isSearchingCursor = false;
+    float mouseWheelMove = GetMouseWheelMove();
+    if (mouseWheelMove != 0) {
+        if (IsKeyDown(KEY_LEFT_CONTROL)) {
+            int oldFontSize = editor->fontSize;
+            int sizeIncrement = editor->fontSize + (int)(mouseWheelMove * 3);
+            int newFontSize = min(max(40, sizeIncrement), 120);
+            editor->fontSize = newFontSize;
+            float scale = 1.0 * newFontSize / oldFontSize;
+
+            if (newFontSize != oldFontSize) {
+                HandleFontLoad(&editor->font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
+                HandleFontLoad(&gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
+                HandleFontLoad(&editor->fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor->fontSize,editor->codepointsGeo, editor->codepointsCountGeo);
+                editor->isUpdateNeeded = true;
+                editor->scrollOffset *= scale;
+            }
+        } else {
+            editor->scrollOffset -= mouseWheelMove * editor->fontSize;
+            editor->isSearchingCursor = false;
+        }
     }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -718,7 +745,7 @@ int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY) {
     TextBuffer *buffer = editor->textBuffer;
     int offset = buffer->cursorByteOffset;
 
-    int targetRow = (mouseY - (editor->textBox.y + TEXT_OFFSET_Y) + (int)editor->scrollOffset) / FONT_SIZE;
+    int targetRow = (mouseY - (editor->textBox.y + TEXT_OFFSET_Y) + (int)editor->scrollOffset) / editor->fontSize;
     targetRow = max(targetRow, 0);
 
     if (targetRow >= buffer->rowList.count) targetRow = buffer->rowList.count - 1;
@@ -799,7 +826,7 @@ void UpdateTextLayout(Editor *editor) {
 
         if (!isNewLine && nextCodePoint != '\0' && (layoutCursor.x + charWidth > editor->textBox.width)) {
             layoutCursor.x = TEXT_OFFSET_X;
-            layoutCursor.y += FONT_SIZE;
+            layoutCursor.y += editor->fontSize;
 
             int currentIndex = (int) (ptr - editor->textBuffer->input);
             PushRowStarts(&editor->textBuffer->rowList, currentIndex);
@@ -809,7 +836,7 @@ void UpdateTextLayout(Editor *editor) {
 
         if (isNewLine) {
             layoutCursor.x = TEXT_OFFSET_X;
-            layoutCursor.y += FONT_SIZE;
+            layoutCursor.y += editor->fontSize;
 
             int nextIndex = (int) (ptr - editor->textBuffer->input) + 1;
             PushRowStarts(&editor->textBuffer->rowList, nextIndex);
@@ -823,7 +850,7 @@ void UpdateTextLayout(Editor *editor) {
         } 
         ptr += editor->codepointSize;
     }
-    editor->totalContentHeight = layoutCursor.y + FONT_SIZE + PADDING;
+    editor->totalContentHeight = layoutCursor.y + editor->fontSize + PADDING;
 }
 
 void HandleFileOpen(Editor *editor) {
@@ -1004,7 +1031,7 @@ void UpdateCursorPosition(Editor *editor) {
             break;
         }
     }
-    editor->cursorPosition.y = TEXT_OFFSET_Y + (i * FONT_SIZE);
+    editor->cursorPosition.y = TEXT_OFFSET_Y + (i * editor->fontSize);
 
     int currentX = TEXT_OFFSET_X;
 
@@ -1027,4 +1054,13 @@ void UpdateCursorPosition(Editor *editor) {
         j += codepointSize;
     }
     editor->cursorPosition.x = currentX;
+}
+
+
+void HandleFontLoad(Font *currentFont, const unsigned char *fileData, int dataSize, int fontSize, int *codepoints, int codepointCount) {
+    if (IsFontValid(*currentFont)) {
+        UnloadFont(*currentFont);
+    }
+    *currentFont =  LoadFontFromMemory(".ttf", fileData, dataSize, fontSize, codepoints, codepointCount);
+    SetTextureFilter(currentFont->texture, TEXTURE_FILTER_BILINEAR);
 }
