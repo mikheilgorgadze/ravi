@@ -6,16 +6,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "lib/tinyfiledialogs.h"
+#include "../lib/tinyfiledialogs.h"
 #include "buffer.h"
 #include "lexer.h"
-#include "resources/fonts/firacode.h"
-#include "resources/fonts/notosans.h"
-#include "resources/logo.h"
+#include "../resources/fonts/firacode.h"
+#include "../resources/fonts/notosans.h"
+#include "../resources/logo.h"
 
 #define CLAY_IMPLEMENTATION
-#include "clay.h"
-#include "renderer/clay_renderer_raylib.h"
+#include "../lib/clay.h"
+#include "../renderer/clay_renderer_raylib.h"
 
 #define DARK_GRAY CLITERAL(Color) {48, 48, 48, 255}
 #define DARK_GRAY_CLAY  {48, 48, 48, 255}

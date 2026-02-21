@@ -1,3 +1,3 @@
 CLANG = clang
-ravi: ravi.c buffer.c buffer.h lexer.c lexer.h
-	$(CLANG) -g ravi.c lib/tinyfiledialogs.c renderer/clay_renderer_raylib.c buffer.c lexer.c -o ravi -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -Wall -Wextra -pedantic -std=c99
+ravi: src/ravi.c src/buffer.c src/buffer.h src/lexer.c src/lexer.h
+	$(CLANG) -g src/ravi.c lib/tinyfiledialogs.c renderer/clay_renderer_raylib.c src/buffer.c src/lexer.c -o ravi -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -Wall -Wextra -pedantic -std=c99

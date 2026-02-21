@@ -1,6 +1,6 @@
 #include <raylib.h>
 #include <raymath.h>
-#include "../clay.h"
+#include "../lib/clay.h"
 
 typedef enum
 {
