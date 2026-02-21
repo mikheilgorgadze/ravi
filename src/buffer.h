@@ -11,22 +11,23 @@ typedef struct {
 } Arena;
 
 typedef struct {
+    int *items;
+    int count;
+} RowList;
+
+typedef struct {
     char* input;
     size_t size;
     size_t capacity;
     int cursorByteOffset;
     int selectionAnchor;
     bool isSaved;
-
-    // row count cache
-    int *rowStarts;
-    int rowCount;
-    int rowCapacity;
+    RowList rowList;
 } TextBuffer;
 
 unsigned char* ArenaAlloc(Arena *arena, size_t size);
-void PushRowStarts(TextBuffer *buffer, Arena *arena, int row);
-void InsertBytes(TextBuffer *buffer, Arena *arena, const char *data, size_t size);
+void PushRowStarts(RowList *rowList, int row);
+void InsertBytes(TextBuffer *buffer, const char *data, size_t size);
 int GetPreviousCharSize(char *buffer, int currentOffset);
 void DeleteRange(TextBuffer *buffer, int start, int end);
 void DeleteCharacter(TextBuffer *buffer);
@@ -37,6 +38,6 @@ int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize);
 int GetWordStart(char *buffer, int currentOffset);
 int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize);
 const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size);
-void InsertCharacter(TextBuffer *buffer, Arena *arena, int key);
+void InsertCharacter(TextBuffer *buffer, int key);
 
 #endif

@@ -11,50 +11,31 @@ unsigned char* ArenaAlloc(Arena *arena, size_t size) {
     return ptr;
 }
 
-void PushRowStarts(TextBuffer *buffer, Arena *arena, int row){
-    if (buffer->rowCount >= buffer->rowCapacity) {
-        int newCapacity = buffer->rowCapacity == 0 ? 16 : buffer->rowCapacity * 2;
-        size_t allocSize = newCapacity  * sizeof(int);
-        int oldRowCapacity = buffer->rowCapacity;
-        int *newRowStarts = (int *) ArenaAlloc(arena, allocSize);
-        buffer->rowCapacity = newCapacity;
-        for (int i = 0; i < oldRowCapacity; i++) {
-            newRowStarts[i] = buffer->rowStarts[i];
-        }
-        buffer->rowStarts = newRowStarts;
-    } 
-
-    buffer->rowStarts[buffer->rowCount] = row;
-    buffer->rowCount++;
+void PushRowStarts(RowList *rowList, int row) {
+    rowList->items[rowList->count] = row;
+    rowList->count ++;
 }
 
 
-void InsertBytes(TextBuffer *buffer, Arena *arena, const char *data, size_t size) {
-    if (buffer->size + size > buffer->capacity) {
-        size_t newCapacity = (buffer->capacity + size) * 2;
-        char *newPtr = (char *)ArenaAlloc(arena, newCapacity);
+void InsertBytes(TextBuffer *buffer, const char *data, size_t size) {
+    if (buffer->size + size < buffer->capacity) {
+        memmove(
+            buffer->input + buffer->cursorByteOffset + size,
+            buffer->input + buffer->cursorByteOffset, 
+            buffer->size - buffer->cursorByteOffset + 1
+        );
+        memcpy(
+            &buffer->input[buffer->cursorByteOffset], 
+            data, 
+            size
+        );
+        buffer->cursorByteOffset += size;
+        buffer->size += size;
+        buffer->selectionAnchor = buffer->cursorByteOffset;
 
-        memcpy(newPtr, buffer->input, buffer->size + 1);
-
-        buffer->input = newPtr;
-        buffer->capacity = newCapacity;
+        buffer->isSaved = false;
     }
 
-    memmove(
-        buffer->input + buffer->cursorByteOffset + size,
-        buffer->input + buffer->cursorByteOffset, 
-        buffer->size - buffer->cursorByteOffset + 1
-    );
-    memcpy(
-        &buffer->input[buffer->cursorByteOffset], 
-        data, 
-        size
-    );
-    buffer->cursorByteOffset += size;
-    buffer->size += size;
-    buffer->selectionAnchor = buffer->cursorByteOffset;
-
-    buffer->isSaved = false;
 }
 
 int GetPreviousCharSize(char *buffer, int currentOffset) {
@@ -227,9 +208,9 @@ const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size) {
     return utf8;
 }
 
-void InsertCharacter(TextBuffer *buffer, Arena *arena, int key) {
+void InsertCharacter(TextBuffer *buffer, int key) {
     int byteSize = 0;
     const char *utf8Symbol = CodepointToUTF8_Buffer(key, &byteSize);
-    InsertBytes(buffer, arena, utf8Symbol, byteSize);
+    InsertBytes(buffer, utf8Symbol, byteSize);
 }
 

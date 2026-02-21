@@ -19,12 +19,18 @@ typedef struct {
     Color color;
 } Keyword;
 
+
 typedef struct {
     int start;
     int end;
     Keyword keyword;
 } SyntaxToken;
 
-void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, SyntaxToken *syntaxTokens, int *tokenCount);
+typedef struct {
+    SyntaxToken *items;
+    int count;
+} SyntaxTokenList;
+
+void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, SyntaxTokenList *syntaxTokens);
 
 #endif

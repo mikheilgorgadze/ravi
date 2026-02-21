@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include "buffer.h"
 #include <ctype.h>
 #include <raylib.h>
 #include <string.h>
@@ -15,14 +16,19 @@ Keyword *GetMatchingKeyword(char *word, Keyword *keywords) {
     return NULL;
 }
 
-void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, SyntaxToken *syntaxTokens, int *tokenCount){
+void PushToken(SyntaxTokenList *tokens, SyntaxToken newToken) {
+    tokens->items[tokens->count] = newToken;
+    tokens->count ++;
+}
+
+void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, SyntaxTokenList *syntaxTokens){
     TokenState state = START;
 
     char buffer[1024];
     SyntaxToken current_pair;
     int i = 0;
     int buffer_len = 0;
-    int count = 0;
+    syntaxTokens->count = 0;
     while (textBuffer->input[i] != '\0') {
         switch (state) {
             case START:
@@ -70,8 +76,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
                     Keyword *keyword = GetMatchingKeyword(buffer, keywords);
                     if (keyword != NULL) {
                         current_pair.keyword = *keyword;
-                        syntaxTokens[count] = current_pair;
-                        count++;
+                        PushToken(syntaxTokens, current_pair);
                     }
 
                     state = START; 
@@ -97,8 +102,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
                     Keyword *keyword = GetMatchingKeyword("string_literal", keywords);
                     if (keyword != NULL) {
                         current_pair.keyword = *keyword;
-                        syntaxTokens[count] = current_pair;
-                        count++;
+                        PushToken(syntaxTokens, current_pair);
                     }
 
                     state = START;
@@ -124,8 +128,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
                     Keyword *keyword = GetMatchingKeyword("single_quotes", keywords);
                     if (keyword != NULL) {
                         current_pair.keyword = *keyword;
-                        syntaxTokens[count] = current_pair;
-                        count++;
+                        PushToken(syntaxTokens, current_pair);
                     }
 
                     state = START;
@@ -139,8 +142,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
                     Keyword *keyword = GetMatchingKeyword("comment", keywords);
                     if (keyword != NULL) {
                         current_pair.keyword = *keyword;
-                        syntaxTokens[count] = current_pair;
-                        count++;
+                        PushToken(syntaxTokens, current_pair);
                     }
                     state = START;
                 } else {
@@ -154,8 +156,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
                     Keyword *keyword = GetMatchingKeyword("comment", keywords);
                     if (keyword != NULL) {
                         current_pair.keyword = *keyword;
-                        syntaxTokens[count] = current_pair;
-                        count++;
+                        PushToken(syntaxTokens, current_pair);
                     }
                     state = START;
                 } else {
@@ -182,8 +183,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
         Keyword *keyword = GetMatchingKeyword(buffer, keywords);
         if (keyword != NULL) {
             current_pair.keyword = *keyword;
-            syntaxTokens[count] = current_pair;
-            count++;
+            PushToken(syntaxTokens, current_pair);
         }
     } else if (state == IN_MULTILINE_COMMENT) {
         current_pair.end = i;
@@ -192,8 +192,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
         Keyword *keyword = GetMatchingKeyword("comment", keywords);
         if (keyword != NULL) {
             current_pair.keyword = *keyword;
-            syntaxTokens[count] = current_pair;
-            count++;
+            PushToken(syntaxTokens, current_pair);
         }
     
     } else if (state == IN_SINGLELINE_COMMENT) {
@@ -203,10 +202,7 @@ void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, Syntax
         Keyword *keyword = GetMatchingKeyword("comment", keywords);
         if (keyword != NULL) {
             current_pair.keyword = *keyword;
-            syntaxTokens[count] = current_pair;
-            count++;
+            PushToken(syntaxTokens, current_pair);
         }
     }
-
-    *tokenCount = count;
 }
