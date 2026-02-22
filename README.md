@@ -28,5 +28,6 @@ For this project I tried to use very few external libraries. They are:
 - Window title shows unsaved state and file name if opened
 - Ability to detect if opened file was changed externally and reload it
 - Supports zoom in and out with `Ctrl` + `Mouse Scroll` combo
+- Supports undo/redo using `Ctrl` + `Z` and `Ctrl` + `Y`
 
 ![Editor screenshot](resources/screenshot.png)
