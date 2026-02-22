@@ -2,7 +2,16 @@
 #define LEXER_H
 
 #include "buffer.h"
-#include <raylib.h>
+
+typedef enum {
+    TOKEN_KEYWORD,
+    TOKEN_DATA_TYPE,
+    TOKEN_STRING_LITERAL,
+    TOKEN_SINGLE_QUOTE,
+    TOKEN_CONSTANT,
+    TOKEN_MACRO,
+    TOKEN_COMMENT,
+} token_type_t;
 
 typedef enum {
     START,
@@ -12,25 +21,25 @@ typedef enum {
     IN_SINGLELINE_COMMENT,
     IN_MULTILINE_COMMENT,
     SPACE,
-} TokenState;
+} token_state_t;
 
 typedef struct {
     char *name;
-    Color color;
-} Keyword;
+    token_type_t token_type;
+} keyword_t;
 
 
 typedef struct {
     int start;
     int end;
-    Keyword keyword;
-} SyntaxToken;
+    keyword_t keyword;
+} syntax_token_t;
 
 typedef struct {
-    SyntaxToken *items;
+    syntax_token_t *items;
     int count;
-} SyntaxTokenList;
+} syntax_token_list_t;
 
-void CalculateSyntaxHighlights(TextBuffer *textBuffer, Keyword *keywords, SyntaxTokenList *syntaxTokens);
+void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords, syntax_token_list_t *syntaxTokens);
 
 #endif

@@ -2,3 +2,5 @@
 ravi
 *.out
 a.out
+*.json
+.cache/

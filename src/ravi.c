@@ -8,7 +8,9 @@
 #include <string.h>
 #include "../lib/tinyfiledialogs.h"
 #include "buffer.h"
+#include "history.h"
 #include "lexer.h"
+#include "arena.h"
 #include "../resources/fonts/firacode.h"
 #include "../resources/fonts/notosans.h"
 #include "../resources/logo.h"
@@ -55,7 +57,8 @@ typedef struct {
     int codepointsGeo[256];
     int codepointsCountGeo;
 
-    SyntaxTokenList syntaxTokens;
+    syntax_token_list_t syntaxTokens;
+    history_buffer_t historyBuffer;
 
     bool isSearchingCursor;
     bool isScrolling;
@@ -64,33 +67,46 @@ typedef struct {
     Font font;
     Font fallbackFont;
     Vector2 cursorPosition;
-    TextBuffer *textBuffer;
+    text_buffer_t *textBuffer;
     Rectangle gutter;
     Rectangle textBox;
 } Editor;
 
-Keyword keywords[] = {
-    {.name = "int",     .color = DARKGREEN},
-    {.name = "float",   .color = DARKGREEN},
-    {.name = "long",    .color = DARKGREEN},
-    {.name = "char",    .color = DARKGREEN},
-    {.name = "void",    .color = DARKGREEN},
-    {.name = "bool",    .color = PURPLE},
-    {.name = "typedef", .color = RED},
-    {.name = "struct",  .color = RED},
-    {.name = "const",  .color = RED},
-    {.name = "#include",  .color = RED},
-    {.name = "#define",  .color = RED},
-    {.name = "if",  .color = RED},
-	{.name = "else",  .color = RED},
-    {.name = "while",  .color = RED},
-    {.name = "for",  .color = RED},
-    {.name = "static",  .color = RED},
-    {.name = "string_literal", .color = GREEN},
-    {.name = "single_quotes", .color = ORANGE},
-    {.name = "comment", .color = GRAY},
+keyword_t keywords[] = {
+    {.name = "int",        .token_type = TOKEN_DATA_TYPE},
+    {.name = "float",      .token_type = TOKEN_DATA_TYPE},
+    {.name = "long",       .token_type = TOKEN_DATA_TYPE},
+    {.name = "char",       .token_type = TOKEN_DATA_TYPE},
+    {.name = "void",       .token_type = TOKEN_DATA_TYPE},
+    {.name = "bool",       .token_type = TOKEN_DATA_TYPE},
+    {.name = "typedef",    .token_type = TOKEN_KEYWORD},
+    {.name = "struct",     .token_type = TOKEN_KEYWORD},
+    {.name = "const",      .token_type = TOKEN_KEYWORD},
+    {.name = "#include",    .token_type = TOKEN_KEYWORD},
+    {.name = "#define",     .token_type = TOKEN_KEYWORD},
+    {.name = "if",          .token_type = TOKEN_KEYWORD},
+	{.name = "else",        .token_type = TOKEN_KEYWORD},
+    {.name = "while",       .token_type = TOKEN_KEYWORD},
+    {.name = "for",         .token_type = TOKEN_KEYWORD},
+    {.name = "static",      .token_type = TOKEN_KEYWORD},
+    {.name = "string_literal", .token_type = TOKEN_STRING_LITERAL},
+    {.name = "single_quotes",  .token_type = TOKEN_SINGLE_QUOTE},
+    {.name = "comment", .token_type= TOKEN_COMMENT},
     {0},
 };
+
+// maps token types to colors
+Color color_theme[10] = {
+    RED,
+    DARKGREEN,
+    GREEN,
+    ORANGE,
+    PURPLE,
+    PURPLE,
+    GRAY,
+};
+
+
 
 void RenderText(Editor *editor);
 void UpdateEditor(Editor* editor, Clay_ElementData elementData);
@@ -113,30 +129,32 @@ void HandelFileSave(Editor *editor);
 void Copy(Editor *editor, int start, int end);
 void UpdateCursorPosition(Editor *editor);
 void HandleFontLoad(Font *currentFont, const unsigned char *fileData, int dataSize, int fontSize, int *codepoints, int codepointCount);
+void RecordDeleteAction(Editor *editor, int startOffset, int length);
+void RecordInsertAction(Editor *editor, const char *text, int length);
 
 Font gutterFont;
 
 int main(int argc, char *argv[]) {
 
-    Arena textInputArena = (Arena) {
-        .memory = malloc(TEXT_ARENA_SIZE / 2),
+    arena_t textInputArena = (arena_t) {
+        .base_memory = malloc(TEXT_ARENA_SIZE / 2),
         .used = 0,
         .capacity = TEXT_ARENA_SIZE / 2
     };
 
-    Arena scratchArena = (Arena) {
-        .memory = malloc(TEXT_ARENA_SIZE / 2),
+    arena_t scratchArena = (arena_t) {
+        .base_memory = malloc(TEXT_ARENA_SIZE / 2),
         .used = 0,
         .capacity = TEXT_ARENA_SIZE / 2
     };
 
-    TextBuffer textBuffer = {
+    text_buffer_t textBuffer = {
         .capacity = MAX_INPUT_CHAR,
         .cursorByteOffset = 0,
         .size = 0,
     };
 
-    textBuffer.input = (char *) ArenaAlloc(&textInputArena, textBuffer.capacity);
+    textBuffer.input = (char *) arena_alloc(&textInputArena, textBuffer.capacity);
     textBuffer.input[0] = '\0';
     textBuffer.rowList.count = 0;
 
@@ -154,6 +172,12 @@ int main(int argc, char *argv[]) {
         .mouseOnText = false,
         .isUpdateNeeded = true,
         .textBuffer = &textBuffer,
+        .historyBuffer = {
+            .actions = {0},
+            .current = 0,
+            .head = 0,
+            .tail = 0,
+        },
         .gutter = {
             .x = 0, .y = 0, .width = 0, .height = 0
         },
@@ -163,12 +187,6 @@ int main(int argc, char *argv[]) {
     };
     editor.currentFilePath[0] = '\0';
     
-
-    //int codepointsASCII[256];
-    //int codepointCountASCII = 0;
-
-    //int codepointsGeo[256];
-    //int codepointCountGeo = 0;
 
     //add ascii unicode character range to codepoints
     for (int i = 32; i < 127; i++) editor.codepointsASCII[editor.codepointsCountASCII++] = i;
@@ -195,13 +213,6 @@ int main(int argc, char *argv[]) {
     HandleFontLoad(&editor.font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
     HandleFontLoad(&gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
     HandleFontLoad(&editor.fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor.fontSize, editor.codepointsGeo, editor.codepointsCountGeo);
-    //editor.fallbackFont = LoadFontFromMemory(".ttf", NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, FONT_SIZE, codepointsGeo, codepointCountGeo);
-    //SetTextureFilter(editor.fallbackFont.texture, TEXTURE_FILTER_ANISOTROPIC_16X);
-
-    //gutterFont = LoadFontFromMemory(".ttf", FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, FONT_SIZE, codepointsASCII, codepointCountASCII);
-    //SetTextureFilter(gutterFont.texture, TEXTURE_FILTER_ANISOTROPIC_16X);
-
-
 
     if (argc > 1) {
         LoadFileInEditor(argv[1], &editor);
@@ -286,13 +297,13 @@ int main(int argc, char *argv[]) {
 
         if (editor.isUpdateNeeded) {
             scratchArena.used = 0;
-            editor.syntaxTokens.items = (SyntaxToken *) ArenaAlloc(&scratchArena, textBuffer.capacity * (sizeof(SyntaxToken)));
+            editor.syntaxTokens.items = (syntax_token_t *) arena_alloc(&scratchArena, textBuffer.capacity * (sizeof(syntax_token_t)));
             editor.syntaxTokens.count = 0;
 
-            textBuffer.rowList.items = (int *) ArenaAlloc(&scratchArena, textBuffer.capacity * sizeof(int));
+            textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, textBuffer.capacity * sizeof(int));
             textBuffer.rowList.count = 0;
 
-            CalculateSyntaxHighlights(&textBuffer, keywords, &editor.syntaxTokens);
+            calculate_syntax_highlights(&textBuffer, keywords, &editor.syntaxTokens);
             UpdateTextLayout(&editor);
             editor.isUpdateNeeded = false;
         }
@@ -326,7 +337,14 @@ int main(int argc, char *argv[]) {
         EndDrawing();
     }
 
+    UnloadFont(editor.font);
+    UnloadFont(editor.fallbackFont);
+    UnloadFont(gutterFont);
+    UnloadImage(icon);
     CloseWindow();
+
+    arena_free(&textInputArena);
+    arena_free(&scratchArena);
 
     return 0;
 }
@@ -346,9 +364,15 @@ void UpdateEditor(Editor* editor, Clay_ElementData elementData) {
         int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
         if (start != end) {
-            DeleteRange(editor->textBuffer, start, end);
+            RecordDeleteAction(editor, start, (end - start));
+            buffer_delete_range(editor->textBuffer, start, end);
         }
-        InsertCharacter(editor->textBuffer, key);
+
+        int byteSize = 0;
+        const char *utf8Symbol = buffer_codepoint_to_utf8(key, &byteSize);
+        RecordInsertAction(editor, utf8Symbol, byteSize);
+
+        buffer_insert_bytes(editor->textBuffer, utf8Symbol, byteSize);
         editor->isUpdateNeeded = true;
         key = GetCharPressed();
     }
@@ -368,7 +392,7 @@ void DrawCursor(Editor *editor, Vector2 position) {
 }
 
 void RenderText(Editor *editor) {
-    TextBuffer *buffer = editor->textBuffer;
+    text_buffer_t *buffer = editor->textBuffer;
 
     Vector2 cursorScreenPosition = (Vector2) {
         .x = editor->cursorPosition.x + editor->textBox.x,
@@ -435,7 +459,7 @@ void RenderText(Editor *editor) {
                 }
                 currentColor = WHITE;
                 if (currentTokenIndex < editor->syntaxTokens.count && start >= editor->syntaxTokens.items[currentTokenIndex].start) {
-                    currentColor = editor->syntaxTokens.items[currentTokenIndex].keyword.color;
+                    currentColor = color_theme[editor->syntaxTokens.items[currentTokenIndex].keyword.token_type];
                 }
                 DrawTextCodepoint(*font, nextCodePoint, charPosition, editor->fontSize, currentColor);
                 currentX += charWidth;
@@ -503,10 +527,10 @@ void HandleKeyboardInput(Editor *editor) {
                 editor->textBuffer->selectionAnchor = 0;
             }
         } else {
-            int charSize = GetPreviousCharSize(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+            int charSize = buffer_get_previous_char_size(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
             editor->textBuffer->cursorByteOffset -= charSize;
 
-            int wordStart = GetWordStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+            int wordStart = buffer_get_word_start(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
             if (IsKeyDown(KEY_LEFT_CONTROL)) {
                 editor->textBuffer->cursorByteOffset = wordStart;
             }
@@ -523,7 +547,7 @@ void HandleKeyboardInput(Editor *editor) {
 
         editor->textBuffer->cursorByteOffset += byteSize;
 
-        int wordEnd = GetWordEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
+        int wordEnd = buffer_get_word_end(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
         if (IsKeyDown(KEY_LEFT_CONTROL)) {
             editor->textBuffer->cursorByteOffset = wordEnd;
         }
@@ -535,13 +559,13 @@ void HandleKeyboardInput(Editor *editor) {
 
     if (IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP)) {
         editor->isSearchingCursor = true;
-        int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+        int startOfCurrentLine = buffer_get_line_start(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
         int currentColumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
 
         int prevLineOffset = editor->textBuffer->cursorByteOffset - currentColumn - 1;
 
         if (prevLineOffset < 0) return;
-        int startOfPrevLine = GetLineStart(editor->textBuffer->input, prevLineOffset);
+        int startOfPrevLine = buffer_get_line_start(editor->textBuffer->input, prevLineOffset);
 
         int previousLineLength = prevLineOffset - startOfPrevLine;
         if (previousLineLength >= 0) {
@@ -559,16 +583,16 @@ void HandleKeyboardInput(Editor *editor) {
 
     if (IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) {
         editor->isSearchingCursor = true;
-        int startOfCurrentLine = GetLineStart(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+        int startOfCurrentLine = buffer_get_line_start(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
         int currentColumn = editor->textBuffer->cursorByteOffset - startOfCurrentLine;
 
-        int endOfCurrentLine = GetLineEnd(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
+        int endOfCurrentLine = buffer_get_line_end(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
 
         if (endOfCurrentLine >= editor->textBuffer->size) return;
 
         int startOfNextLine =  endOfCurrentLine + 1;
 
-        int nextLineEnd = GetLineEnd(editor->textBuffer->input, startOfNextLine, editor->textBuffer->size);
+        int nextLineEnd = buffer_get_line_end(editor->textBuffer->input, startOfNextLine, editor->textBuffer->size);
         int nextLineLength = nextLineEnd - startOfNextLine;
         if (nextLineLength >= 0) {
             int minOffset = (nextLineLength < currentColumn) ? nextLineLength : currentColumn;
@@ -585,13 +609,15 @@ void HandleKeyboardInput(Editor *editor) {
 
     if (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER)) {
         editor->isSearchingCursor = true;
-        InsertCharacter(editor->textBuffer, '\n');
+        RecordInsertAction(editor, "\n", 1);
+        buffer_insert_character(editor->textBuffer, '\n');
         editor->isUpdateNeeded = true;
     }
 
     if (IsKeyPressed(KEY_TAB) || IsKeyPressedRepeat(KEY_TAB)) {
         editor->isSearchingCursor = true;
-        InsertCharacter(editor->textBuffer, '\t');
+        RecordInsertAction(editor, "\t", 1);
+        buffer_insert_character(editor->textBuffer, '\t');
         editor->isUpdateNeeded = true;
     }
 
@@ -601,10 +627,14 @@ void HandleKeyboardInput(Editor *editor) {
             int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
             int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
 
-            DeleteRange(editor->textBuffer, start, end);
+            RecordDeleteAction(editor, start, (end - start));
+
+            buffer_delete_range(editor->textBuffer, start, end);
             editor->isUpdateNeeded = true;
         } else {
-            DeleteCharacter(editor->textBuffer);
+            int length = buffer_get_previous_char_size(editor->textBuffer->input, editor->textBuffer->cursorByteOffset);
+            RecordDeleteAction(editor, (editor->textBuffer->cursorByteOffset - length), length);
+            buffer_delete_character(editor->textBuffer);
             editor->isUpdateNeeded = true;
         }
     }
@@ -615,7 +645,9 @@ void HandleKeyboardInput(Editor *editor) {
             int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
             int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
 
-            DeleteRange(editor->textBuffer, start, end);
+            RecordDeleteAction(editor, start, (end - start));
+
+            buffer_delete_range(editor->textBuffer, start, end);
             editor->isUpdateNeeded = true;
         } else {
             if (editor->textBuffer->cursorByteOffset >= editor->textBuffer->size) return;
@@ -623,7 +655,9 @@ void HandleKeyboardInput(Editor *editor) {
             int byteSize = 0;
             GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
 
-            DeleteRange(editor->textBuffer, editor->textBuffer->cursorByteOffset, editor->textBuffer->cursorByteOffset + byteSize);
+            RecordDeleteAction(editor, (editor->textBuffer->cursorByteOffset - byteSize), byteSize);
+
+            buffer_delete_range(editor->textBuffer, editor->textBuffer->cursorByteOffset, editor->textBuffer->cursorByteOffset + byteSize);
             editor->isUpdateNeeded = true;
         }
     }
@@ -642,7 +676,8 @@ void HandleKeyboardInput(Editor *editor) {
 
         if (clipboardText != NULL) {
             size_t pastedSize = strlen(clipboardText);
-            InsertBytes(editor->textBuffer, clipboardText, pastedSize);
+            RecordInsertAction(editor, clipboardText, pastedSize);
+            buffer_insert_bytes(editor->textBuffer, clipboardText, pastedSize);
             editor->isUpdateNeeded = true;
         }
     }
@@ -655,7 +690,42 @@ void HandleKeyboardInput(Editor *editor) {
         Copy(editor, start, end);
 
         if (start != end) {
-            DeleteRange(editor->textBuffer, start, end);
+            RecordDeleteAction(editor, start, (end - start));
+            buffer_delete_range(editor->textBuffer, start, end);
+            editor->isUpdateNeeded = true;
+        }
+    }
+
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
+        action_t action = {0};
+        if (undo(&editor->historyBuffer, &action)) {
+            editor->textBuffer->cursorByteOffset = action.offset;
+            editor->textBuffer->selectionAnchor = action.offset;
+            switch (action.type) {
+                case ACTION_INSERT:
+                    buffer_delete_range(editor->textBuffer, action.offset, action.offset + action.length);
+                break;
+                case ACTION_DELETE:
+                    buffer_insert_bytes(editor->textBuffer, action.text, action.length);
+                break;
+            }
+            editor->isUpdateNeeded = true;
+        }
+    }
+
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Y)) {
+        action_t action = {0};
+        if (redo(&editor->historyBuffer, &action)) {
+            editor->textBuffer->cursorByteOffset = action.offset;
+            editor->textBuffer->selectionAnchor = action.offset;
+            switch (action.type) {
+                case ACTION_INSERT:
+                    buffer_insert_bytes(editor->textBuffer, action.text, action.length);
+                break;
+                case ACTION_DELETE:
+                    buffer_delete_range(editor->textBuffer, action.offset, action.offset + action.length);
+                break;
+            }
             editor->isUpdateNeeded = true;
         }
     }
@@ -742,8 +812,7 @@ void HandleMouseEvents(Editor *editor, Clay_ElementData elementData) {
 }
 
 int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY) {
-    TextBuffer *buffer = editor->textBuffer;
-    int offset = buffer->cursorByteOffset;
+    text_buffer_t *buffer = editor->textBuffer;
 
     int targetRow = (mouseY - (editor->textBox.y + TEXT_OFFSET_Y) + (int)editor->scrollOffset) / editor->fontSize;
     targetRow = max(targetRow, 0);
@@ -800,7 +869,7 @@ int max(int x, int y) {
 
 void UpdateTextLayout(Editor *editor) {
     editor->textBuffer->rowList.count = 0;
-    PushRowStarts(&editor->textBuffer->rowList, 0);
+    buffer_push_to_row_list(&editor->textBuffer->rowList, 0);
 
     char *ptr = editor->textBuffer->input;
     bool running = true;
@@ -829,7 +898,7 @@ void UpdateTextLayout(Editor *editor) {
             layoutCursor.y += editor->fontSize;
 
             int currentIndex = (int) (ptr - editor->textBuffer->input);
-            PushRowStarts(&editor->textBuffer->rowList, currentIndex);
+            buffer_push_to_row_list(&editor->textBuffer->rowList, currentIndex);
         }
 
         if (nextCodePoint == '\0') break;
@@ -839,7 +908,7 @@ void UpdateTextLayout(Editor *editor) {
             layoutCursor.y += editor->fontSize;
 
             int nextIndex = (int) (ptr - editor->textBuffer->input) + 1;
-            PushRowStarts(&editor->textBuffer->rowList, nextIndex);
+            buffer_push_to_row_list(&editor->textBuffer->rowList, nextIndex);
         } else if (isTab) {
             int index = GetGlyphIndex(editor->font, ' ');
             int spaceWidth = editor->font.glyphs[index].advanceX;
@@ -881,7 +950,7 @@ void LoadFileInEditor(const char *fileName, Editor *editor) {
     unsigned char *fileData = LoadFileData(fileName, &size);
 
     if (fileData != NULL) {
-        InsertBytes(editor->textBuffer, (char *) fileData, size);
+        buffer_insert_bytes(editor->textBuffer, (char *) fileData, size);
         strncpy(editor->currentFilePath, fileName, 1024);
         UnloadFileData(fileData);
         editor->lastModificationTime = GetFileModTime(fileName);
@@ -1061,6 +1130,32 @@ void HandleFontLoad(Font *currentFont, const unsigned char *fileData, int dataSi
     if (IsFontValid(*currentFont)) {
         UnloadFont(*currentFont);
     }
-    *currentFont =  LoadFontFromMemory(".ttf", fileData, dataSize, fontSize, codepoints, codepointCount);
+    *currentFont = LoadFontFromMemory(".ttf", fileData, dataSize, fontSize, codepoints, codepointCount);
     SetTextureFilter(currentFont->texture, TEXTURE_FILTER_BILINEAR);
+}
+
+void RecordDeleteAction(Editor *editor, int startOffset, int length) {
+    if (length <= 0) return;
+
+    char *text = malloc(length + 1);
+    memcpy(text, editor->textBuffer->input + startOffset, length);
+    text[length] = '\0';
+    action_t action = {
+        .type = ACTION_DELETE,
+        .length = length,
+        .offset = startOffset,
+        .text = text,
+    };
+    record_action(&editor->historyBuffer, action);
+    free(text);
+}
+
+void RecordInsertAction(Editor *editor, const char *text, int length) {
+    action_t action = {
+        .type = ACTION_INSERT,
+        .length = length,
+        .offset = editor->textBuffer->cursorByteOffset,
+        .text = (char *)text,
+    };
+    record_action(&editor->historyBuffer, action);
 }

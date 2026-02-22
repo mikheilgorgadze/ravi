@@ -1,23 +1,14 @@
 #include "buffer.h"
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
-unsigned char* ArenaAlloc(Arena *arena, size_t size) {
-    assert(arena->used + size <= arena->capacity);
-
-    void *ptr = arena->memory + arena->used;
-    arena->used += size;
-
-    return ptr;
-}
-
-void PushRowStarts(RowList *rowList, int row) {
+void buffer_push_to_row_list(row_list_t *rowList, int row) {
     rowList->items[rowList->count] = row;
     rowList->count ++;
 }
 
-
-void InsertBytes(TextBuffer *buffer, const char *data, size_t size) {
+void buffer_insert_bytes(text_buffer_t *buffer, const char *data, size_t size) {
     if (buffer->size + size < buffer->capacity) {
         memmove(
             buffer->input + buffer->cursorByteOffset + size,
@@ -38,7 +29,7 @@ void InsertBytes(TextBuffer *buffer, const char *data, size_t size) {
 
 }
 
-int GetPreviousCharSize(char *buffer, int currentOffset) {
+int buffer_get_previous_char_size(char *buffer, int currentOffset) {
     if (currentOffset <= 0) return 0;
 
     int charSize = 1;
@@ -52,7 +43,7 @@ int GetPreviousCharSize(char *buffer, int currentOffset) {
     return charSize;
 }
 
-void DeleteRange(TextBuffer *buffer, int start, int end) {
+void buffer_delete_range(text_buffer_t *buffer, int start, int end) {
     if (start >= end)return;
 
     int count = end - start;
@@ -70,39 +61,15 @@ void DeleteRange(TextBuffer *buffer, int start, int end) {
     buffer->isSaved = false;
 }
 
-void DeleteCharacter(TextBuffer *buffer) {
+void buffer_delete_character(text_buffer_t *buffer) {
     if (buffer->cursorByteOffset <= 0) return;
 
-    int bytesToDelete = GetPreviousCharSize(buffer->input, buffer->cursorByteOffset);
+    int bytesToDelete = buffer_get_previous_char_size(buffer->input, buffer->cursorByteOffset);
 
-    DeleteRange(buffer, buffer->cursorByteOffset - bytesToDelete, buffer->cursorByteOffset);
+    buffer_delete_range(buffer, buffer->cursorByteOffset - bytesToDelete, buffer->cursorByteOffset);
 }
 
-size_t string_len_utf8(const char *str) {
-    size_t count = 0;
-    while (*str) {
-        if ((*str & 0xC0) != 0x80 ) {
-            count++;
-        }
-        str++;
-    }
-    return count;
-}
-
-
-size_t safe_strlen(const char *s, size_t max_len) {
-    size_t length = 0;
-    if (s == NULL) { // Check for null pointer
-        return 0;
-    }
-    while (length < max_len && s[length] != '\0') { // Check bounds and terminator
-        length++;
-    }
-    return length;
-}
-
-
-int GetLineStart(char *buffer, int currentOffset) {
+int buffer_get_line_start(char *buffer, int currentOffset) {
     if (currentOffset <= 0) return 0;
 
     int scanIndex = currentOffset;
@@ -117,7 +84,7 @@ int GetLineStart(char *buffer, int currentOffset) {
     return 0;
 }
 
-int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize) {
+int buffer_get_line_end(char *buffer, int currentOffset, size_t bufferSize) {
     if (currentOffset < 0) return 0;
     if (bufferSize < currentOffset) return 0;
 
@@ -133,7 +100,7 @@ int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize) {
     return bufferSize;
 }
 
-int GetWordStart(char *buffer, int currentOffset) {
+int buffer_get_word_start(char *buffer, int currentOffset) {
     if (currentOffset <= 0) return 0;
 
     int scanIndex = currentOffset;
@@ -149,7 +116,7 @@ int GetWordStart(char *buffer, int currentOffset) {
     return scanIndex;
 }
 
-int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize) {
+int buffer_get_word_end(char *buffer, int currentOffset, size_t bufferSize) {
     if (currentOffset < 0) return 0;
     if (bufferSize < currentOffset) return 0;
 
@@ -171,7 +138,7 @@ int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize) {
 }
 
 //copied from raylib's implementation
-const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size) {
+const char *buffer_codepoint_to_utf8(int codepoint, int *utf8Size) {
     static char utf8[6] = { 0 };
     memset(utf8, 0, 6); // Clear static array
     int size = 0;       // Byte size of codepoint
@@ -208,9 +175,9 @@ const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size) {
     return utf8;
 }
 
-void InsertCharacter(TextBuffer *buffer, int key) {
+void buffer_insert_character(text_buffer_t *buffer, int key) {
     int byteSize = 0;
-    const char *utf8Symbol = CodepointToUTF8_Buffer(key, &byteSize);
-    InsertBytes(buffer, utf8Symbol, byteSize);
+    const char *utf8Symbol = buffer_codepoint_to_utf8(key, &byteSize);
+    buffer_insert_bytes(buffer, utf8Symbol, byteSize);
 }
 

@@ -4,16 +4,11 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-typedef struct {
-    unsigned char *memory;
-    size_t capacity;
-    size_t used;
-} Arena;
 
 typedef struct {
     int *items;
     int count;
-} RowList;
+} row_list_t;
 
 typedef struct {
     char* input;
@@ -22,22 +17,19 @@ typedef struct {
     int cursorByteOffset;
     int selectionAnchor;
     bool isSaved;
-    RowList rowList;
-} TextBuffer;
+    row_list_t rowList;
+} text_buffer_t;
 
-unsigned char* ArenaAlloc(Arena *arena, size_t size);
-void PushRowStarts(RowList *rowList, int row);
-void InsertBytes(TextBuffer *buffer, const char *data, size_t size);
-int GetPreviousCharSize(char *buffer, int currentOffset);
-void DeleteRange(TextBuffer *buffer, int start, int end);
-void DeleteCharacter(TextBuffer *buffer);
-size_t string_len_utf8(const char *str);
-size_t safe_strlen(const char *s, size_t max_len);
-int GetLineStart(char *buffer, int currentOffset);
-int GetLineEnd(char *buffer, int currentOffset, size_t bufferSize);
-int GetWordStart(char *buffer, int currentOffset);
-int GetWordEnd(char *buffer, int currentOffset, size_t bufferSize);
-const char *CodepointToUTF8_Buffer(int codepoint, int *utf8Size);
-void InsertCharacter(TextBuffer *buffer, int key);
+void buffer_push_to_row_list(row_list_t *rowList, int row);
+void buffer_insert_bytes(text_buffer_t *buffer, const char *data, size_t size);
+int  buffer_get_previous_char_size(char *buffer, int currentOffset);
+void buffer_delete_range(text_buffer_t *buffer, int start, int end);
+void buffer_delete_character(text_buffer_t *buffer);
+int  buffer_get_line_start(char *buffer, int currentOffset);
+int  buffer_get_line_end(char *buffer, int currentOffset, size_t bufferSize);
+int  buffer_get_word_start(char *buffer, int currentOffset);
+int  buffer_get_word_end(char *buffer, int currentOffset, size_t bufferSize);
+const char *buffer_codepoint_to_utf8(int codepoint, int *utf8Size);
+void buffer_insert_character(text_buffer_t *buffer, int key);
 
 #endif
