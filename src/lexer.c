@@ -37,7 +37,7 @@ void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords,
                     buffer_len = 0;
                     buffer[0] = textBuffer->input[i];
                     buffer_len ++;
-                    state = IN_STRING;
+                    state = IN_TOKEN;
                 } else if (textBuffer->input[i] == '"') {
                     current_pair.start = i;
                     state = IN_DOUBLE_QUOTES;
@@ -58,9 +58,9 @@ void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords,
                     state = START;
                 }
             break;
-            case IN_STRING:
+            case IN_TOKEN:
                 if (isalnum(textBuffer->input[i]) || textBuffer->input[i] == '#') {
-                    state = IN_STRING;
+                    state = IN_TOKEN;
                     if (buffer_len < 1023) {
                         buffer[buffer_len] = textBuffer->input[i];
                         buffer_len ++;
@@ -176,7 +176,7 @@ void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords,
         i++;
     }
 
-    if (state == IN_STRING) {
+    if (state == IN_TOKEN) {
         current_pair.end = i;
         buffer[buffer_len] = '\0';
         

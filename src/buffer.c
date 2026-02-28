@@ -25,6 +25,7 @@ void buffer_insert_bytes(text_buffer_t *buffer, const char *data, size_t size) {
         buffer->selectionAnchor = buffer->cursorByteOffset;
 
         buffer->isSaved = false;
+        buffer->input[buffer->size] = '\0';
     }
 
 }
@@ -59,6 +60,7 @@ void buffer_delete_range(text_buffer_t *buffer, int start, int end) {
     buffer->size -= count;
 
     buffer->isSaved = false;
+    buffer->input[buffer->size] = '\0';
 }
 
 void buffer_delete_character(text_buffer_t *buffer) {
@@ -86,11 +88,11 @@ int buffer_get_line_start(char *buffer, int currentOffset) {
 
 int buffer_get_line_end(char *buffer, int currentOffset, size_t bufferSize) {
     if (currentOffset < 0) return 0;
-    if (bufferSize < currentOffset) return 0;
+    if ((int) bufferSize < currentOffset) return 0;
 
     int scanIndex = currentOffset;
 
-    while(scanIndex < bufferSize) {
+    while(scanIndex < (int) bufferSize) {
         if (buffer[scanIndex] == '\n') {
             return scanIndex;
         }
@@ -118,19 +120,19 @@ int buffer_get_word_start(char *buffer, int currentOffset) {
 
 int buffer_get_word_end(char *buffer, int currentOffset, size_t bufferSize) {
     if (currentOffset < 0) return 0;
-    if (bufferSize < currentOffset) return 0;
+    if ((int) bufferSize < currentOffset) return 0;
 
     int scanIndex = currentOffset;
 
-    if (scanIndex < bufferSize && buffer[scanIndex] == '\n') {
+    if (scanIndex < (int) bufferSize && buffer[scanIndex] == '\n') {
         return scanIndex + 1;
     }
 
-    while(scanIndex < bufferSize && (buffer[scanIndex] != ' ' && buffer[scanIndex] != '\n')) {
+    while(scanIndex < (int) bufferSize && (buffer[scanIndex] != ' ' && buffer[scanIndex] != '\n')) {
         scanIndex ++;
     }
 
-    while(scanIndex < bufferSize && (buffer[scanIndex] == ' ' || buffer[scanIndex] == '\t')) {
+    while(scanIndex < (int) bufferSize && (buffer[scanIndex] == ' ' || buffer[scanIndex] == '\t')) {
         scanIndex ++;
     }
 

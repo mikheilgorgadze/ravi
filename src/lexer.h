@@ -15,7 +15,7 @@ typedef enum {
 
 typedef enum {
     START,
-    IN_STRING,
+    IN_TOKEN,
     IN_SINGLE_QUOTES,
     IN_DOUBLE_QUOTES,
     IN_SINGLELINE_COMMENT,

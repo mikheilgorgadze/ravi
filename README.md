@@ -29,5 +29,11 @@ For this project I tried to use very few external libraries. They are:
 - Ability to detect if opened file was changed externally and reload it
 - Supports zoom in and out with `Ctrl` + `Mouse Scroll` combo
 - Supports undo/redo using `Ctrl` + `Z` and `Ctrl` + `Y`
+- Searching functionality - `Ctrl` + `F` triggers search bar, from which you can search in editor
+- If you have unsaved changes and try to close editor, popup prompt will appear to ask you to save, discard or cancel
 
-![Editor screenshot](resources/screenshot.png)
+![Editor screenshot](resources/screenshots/main.png)
+
+![Editor screenshot](resources/screenshots/search.png)
+![Editor screenshot](resources/screenshots/close.png)
+

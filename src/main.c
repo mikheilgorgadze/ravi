@@ -27,17 +27,22 @@
 
 #define COLOR_BLUE {0, 0, 255, 255}
 #define COLOR_ORANGE {255, 255, 0, 255}
+#define COLOR_RED {255, 0, 0, 255}
 
-#define MAX_INPUT_CHAR 100000
+#define MAX_INPUT_CHAR 10000000
 #define PADDING 40
-#define GUTTER_WIDTH 150
 #define TEXT_OFFSET_X 5
 #define TEXT_OFFSET_Y 5
-#define TEXT_ARENA_SIZE 100 * 1024 * 1024
+#define TEXT_ARENA_SIZE 1024 * 1024 * 1024
 
 #define FONT_SANS "resources/fonts/NotoSansGeorgian-Regular.ttf"
 #define FONT_MONO "resources/fonts/FiraCode-Regular.ttf"
 
+typedef enum {
+    MODE_NORMAL,
+    MODE_SEARCH,
+    MODE_PROMPT,
+} EditorMode;
 
 typedef struct {
     const char* title;
@@ -48,8 +53,12 @@ typedef struct {
     int codepointSize;
     int frameCounter;
     int fontSize;
+    float gutterWidth;
     float scrollOffset;
     float totalContentHeight;
+
+    text_buffer_t *searchBuffer;
+    EditorMode editorMode;
 
     int codepointsASCII[256];
     int codepointsCountASCII;
@@ -65,33 +74,35 @@ typedef struct {
     bool mouseOnText;
     bool isUpdateNeeded;
     Font font;
+    Font gutterFont;
     Font fallbackFont;
     Vector2 cursorPosition;
     text_buffer_t *textBuffer;
     Rectangle gutter;
     Rectangle textBox;
+    Rectangle searchBox;
 } Editor;
 
 keyword_t keywords[] = {
-    {.name = "int",        .token_type = TOKEN_DATA_TYPE},
-    {.name = "float",      .token_type = TOKEN_DATA_TYPE},
-    {.name = "long",       .token_type = TOKEN_DATA_TYPE},
-    {.name = "char",       .token_type = TOKEN_DATA_TYPE},
-    {.name = "void",       .token_type = TOKEN_DATA_TYPE},
-    {.name = "bool",       .token_type = TOKEN_DATA_TYPE},
-    {.name = "typedef",    .token_type = TOKEN_KEYWORD},
-    {.name = "struct",     .token_type = TOKEN_KEYWORD},
-    {.name = "const",      .token_type = TOKEN_KEYWORD},
-    {.name = "#include",    .token_type = TOKEN_KEYWORD},
-    {.name = "#define",     .token_type = TOKEN_KEYWORD},
-    {.name = "if",          .token_type = TOKEN_KEYWORD},
-	{.name = "else",        .token_type = TOKEN_KEYWORD},
-    {.name = "while",       .token_type = TOKEN_KEYWORD},
-    {.name = "for",         .token_type = TOKEN_KEYWORD},
-    {.name = "static",      .token_type = TOKEN_KEYWORD},
-    {.name = "string_literal", .token_type = TOKEN_STRING_LITERAL},
-    {.name = "single_quotes",  .token_type = TOKEN_SINGLE_QUOTE},
-    {.name = "comment", .token_type= TOKEN_COMMENT},
+    {.name = "int",             .token_type = TOKEN_DATA_TYPE},
+    {.name = "float",           .token_type = TOKEN_DATA_TYPE},
+    {.name = "long",            .token_type = TOKEN_DATA_TYPE},
+    {.name = "char",            .token_type = TOKEN_DATA_TYPE},
+    {.name = "void",            .token_type = TOKEN_DATA_TYPE},
+    {.name = "bool",            .token_type = TOKEN_DATA_TYPE},
+    {.name = "typedef",         .token_type = TOKEN_KEYWORD},
+    {.name = "struct",          .token_type = TOKEN_KEYWORD},
+    {.name = "const",           .token_type = TOKEN_KEYWORD},
+    {.name = "#include",        .token_type = TOKEN_KEYWORD},
+    {.name = "#define",         .token_type = TOKEN_KEYWORD},
+    {.name = "if",              .token_type = TOKEN_KEYWORD},
+	{.name = "else",            .token_type = TOKEN_KEYWORD},
+    {.name = "while",           .token_type = TOKEN_KEYWORD},
+    {.name = "for",             .token_type = TOKEN_KEYWORD},
+    {.name = "static",          .token_type = TOKEN_KEYWORD},
+    {.name = "string_literal",  .token_type = TOKEN_STRING_LITERAL},
+    {.name = "single_quotes",   .token_type = TOKEN_SINGLE_QUOTE},
+    {.name = "comment",         .token_type = TOKEN_COMMENT},
     {0},
 };
 
@@ -109,9 +120,13 @@ Color color_theme[10] = {
 
 
 void RenderText(Editor *editor);
+void RenderSearchBarText(Editor *editor);
 void UpdateEditor(Editor* editor, Clay_ElementData elementData);
 void HandleScroll(Editor *editor);
 void HandleKeyboardInput(Editor *editor);
+void HandleNormalMode(Editor *editor);
+void HandleSearchMode(Editor *editor);
+void HandlePromptMode(Editor *editor);
 void HandleMouseEvents(Editor *editor, Clay_ElementData elementData);
 int GetIndexFromMouse(Editor *editor, int mouseX, int mouseY);
 int min(int x, int y);
@@ -122,17 +137,19 @@ void ClearEditor(Editor *editor);
 void LoadFileInEditor(const char *fileName, Editor *editor);
 void HandleFileOpen(Editor *editor);
 Font* GetFontForCodepoint(Editor *editor, int codepoint);
-bool MenuElementComponent(Clay_String text, Clay_String id, int *cursor);
+bool ButtonComponent(Clay_String text, Clay_String id, int *cursor, float width, Clay_Color color);
 void RenderScrollbar(Editor *editor, Clay_ElementData elementData);
 bool IsSeparator(int codepoint);
-void HandelFileSave(Editor *editor);
+void HandleFileSave(Editor *editor);
 void Copy(Editor *editor, int start, int end);
 void UpdateCursorPosition(Editor *editor);
 void HandleFontLoad(Font *currentFont, const unsigned char *fileData, int dataSize, int fontSize, int *codepoints, int codepointCount);
 void RecordDeleteAction(Editor *editor, int startOffset, int length);
 void RecordInsertAction(Editor *editor, const char *text, int length);
-
-Font gutterFont;
+void RenderGutter(Editor *editor);
+void FindNextMatch(Editor *editor, int startOffset);
+void Zoom(Editor *editor, float zoomAmt);
+void Scroll(Editor *editor, float scrollAmt);
 
 int main(int argc, char *argv[]) {
 
@@ -152,11 +169,21 @@ int main(int argc, char *argv[]) {
         .capacity = MAX_INPUT_CHAR,
         .cursorByteOffset = 0,
         .size = 0,
+        .isSaved = true,
+    };
+
+    text_buffer_t searchBuffer = {
+        .capacity = 256,
+        .cursorByteOffset = 0,
+        .size = 0
     };
 
     textBuffer.input = (char *) arena_alloc(&textInputArena, textBuffer.capacity);
     textBuffer.input[0] = '\0';
     textBuffer.rowList.count = 0;
+
+    searchBuffer.input = (char *) arena_alloc(&textInputArena, searchBuffer.capacity);
+    searchBuffer.input[0] = '\0';
 
     Editor editor = {
         .title = "Ravi Editor",
@@ -168,10 +195,13 @@ int main(int argc, char *argv[]) {
         .codepointSize = 0,
         .frameCounter = 0,
         .scrollOffset = 0.0,
+        .gutterWidth = 150.0,
         .isSearchingCursor = false,
+        .editorMode = MODE_NORMAL,
         .mouseOnText = false,
         .isUpdateNeeded = true,
         .textBuffer = &textBuffer,
+        .searchBuffer = &searchBuffer,
         .historyBuffer = {
             .actions = {0},
             .current = 0,
@@ -208,10 +238,10 @@ int main(int argc, char *argv[]) {
         .capacity = clayRequiredMemory,
     };
 
-    Clay_Initialize(clayMemory, (Clay_Dimensions) {.width = GetScreenWidth(), .height = GetScreenHeight()}, (Clay_ErrorHandler) {});
+    Clay_Initialize(clayMemory, (Clay_Dimensions) {.width = GetScreenWidth(), .height = GetScreenHeight()}, (Clay_ErrorHandler) {0});
 
     HandleFontLoad(&editor.font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
-    HandleFontLoad(&gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
+    HandleFontLoad(&editor.gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
     HandleFontLoad(&editor.fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor.fontSize, editor.codepointsGeo, editor.codepointsCountGeo);
 
     if (argc > 1) {
@@ -219,45 +249,156 @@ int main(int argc, char *argv[]) {
     }
 
 
-    while(!WindowShouldClose()) {
+    bool exit = false;
+    while(!exit) {
+        if (WindowShouldClose()) {
+            if (editor.textBuffer->isSaved) {
+                exit = true;
+            } else {
+                editor.editorMode = MODE_PROMPT;
+            }
+        }
+
         int cursor = MOUSE_CURSOR_DEFAULT;
 
-        Font fonts[3] = {editor.font, editor.fallbackFont, gutterFont};
+        Font fonts[3] = {editor.font, editor.fallbackFont, editor.gutterFont};
         Clay_Vector2 mousePosition = {.x = GetMouseX(), .y = GetMouseY()}; 
         Clay_SetPointerState(mousePosition, true);
+
 
         Clay_BeginLayout();
 
         Clay_SetLayoutDimensions((Clay_Dimensions) {.width = GetScreenWidth(), .height = GetScreenHeight()});
 
 
-        CLAY(CLAY_ID("MainContainer"), { .layout = {.layoutDirection = CLAY_TOP_TO_BOTTOM, .sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}}, 
-            .backgroundColor = DARK_GRAY_CLAY}) {
+        CLAY(CLAY_ID("MainContainer"), {
+            .layout = {
+                .layoutDirection = CLAY_TOP_TO_BOTTOM, 
+                .sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}
+            }, 
+        }) {
 
-            CLAY(CLAY_ID("TopMenu"), {.layout = {.layoutDirection = CLAY_LEFT_TO_RIGHT, .sizing = {.width = CLAY_SIZING_GROW(0),
-                .height = CLAY_SIZING_FIXED(50)}}, .backgroundColor = DARK_GRAY_CLAY}) {
+            CLAY(CLAY_ID("TopMenu"), {
+                .layout = {
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT, 
+                    .sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIXED(50)}
+                }, 
+                .backgroundColor = DARK_GRAY_CLAY
+                 }) {
 
-                if (MenuElementComponent(CLAY_STRING("Open File"), CLAY_STRING("FileOpen"), &cursor)) {
+                if (ButtonComponent(CLAY_STRING("Open File"), CLAY_STRING("FileOpen"), &cursor, 150.0, (Clay_Color)DARK_GRAY_CLAY)) {
                     HandleFileOpen(&editor);
                 };
-                if (MenuElementComponent(CLAY_STRING("Save File"), CLAY_STRING("FileSave"), &cursor)) {
-                    HandelFileSave(&editor);
+                if (ButtonComponent(CLAY_STRING("Save File"), CLAY_STRING("FileSave"), &cursor, 150.0, (Clay_Color)DARK_GRAY_CLAY)) {
+                    HandleFileSave(&editor);
                 }
             }
 
-            CLAY(CLAY_ID("EditorArea"), {.layout = {.layoutDirection = CLAY_LEFT_TO_RIGHT, .sizing = {.width = CLAY_SIZING_GROW(0),
-                .height = CLAY_SIZING_GROW(0)}}}) {
-                CLAY(CLAY_ID("Gutter"), {.layout = {.layoutDirection = CLAY_TOP_TO_BOTTOM, .sizing = {.width = CLAY_SIZING_FIXED(GUTTER_WIDTH), 
-                    .height = CLAY_SIZING_GROW(0)}, .padding = CLAY_PADDING_ALL(16), .childGap = 16}, .backgroundColor = GUTTER_COLOR_CLAY}){}
+            CLAY(CLAY_ID("EditorArea"), {
+                .layout = {
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT, 
+                    .sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)}
+                }
+            }) {
 
-                CLAY(CLAY_ID("TextBox"), {.layout = {.sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)}}, 
-                     .backgroundColor = DARK_GRAY_CLAY}){}
+                CLAY(CLAY_ID("Gutter"), {
+                    .layout = {
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM, 
+                        .sizing = {.width = CLAY_SIZING_FIXED(editor.gutterWidth), .height = CLAY_SIZING_GROW(0)}, 
+                        .padding = CLAY_PADDING_ALL(16), 
+                        .childGap = 16
+                    }, 
+                }){}
+
+                CLAY(CLAY_ID("TextBoxContainer"), {
+                    .layout = {
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        .sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)}
+                    }
+                }) {
+
+                    CLAY(CLAY_ID("TextBox"), {
+                        .layout = {
+                            .sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_GROW(0)}
+                        }, 
+                        })
+                    {}
+
+                    if (editor.editorMode == MODE_SEARCH) {
+                        CLAY(CLAY_ID("SearchBox"), {
+                            .layout = {
+                                .sizing = {.width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIXED(50)},
+                                .padding = CLAY_PADDING_ALL(16)}, 
+                             })
+                        {}
+                    }
+
+                }
 
                 CLAY(CLAY_ID("ScrollBar"), {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(40), .height = CLAY_SIZING_GROW(0)},
                      .padding = CLAY_PADDING_ALL(10)},
-                     .backgroundColor = GUTTER_COLOR_CLAY, .border = 11}){
+                     //.backgroundColor = GUTTER_COLOR_CLAY
+                     }){
                     if (Clay_Hovered()) {
                         cursor = MOUSE_CURSOR_POINTING_HAND;
+                    }
+                }
+
+                if (editor.editorMode == MODE_PROMPT) {
+                    CLAY(CLAY_ID("PromptBox"), {
+                        .floating = {
+                        .attachTo = CLAY_ATTACH_TO_PARENT,
+                        .zIndex = 100,
+                        .attachPoints = {
+                                .element = CLAY_ATTACH_POINT_CENTER_CENTER, 
+                                .parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+                            }
+                        }, 
+                         .layout = {
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                            .sizing = {.width = CLAY_SIZING_FIXED(500), .height = CLAY_SIZING_FIXED(200)},
+                            .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER},
+                            .childGap = 50,
+                         },
+                         .backgroundColor = LIGHT_GRAY_CLAY
+                         })
+                    {
+                        if (Clay_Hovered()) {
+                            cursor = MOUSE_CURSOR_ARROW;
+                        }
+                        CLAY(CLAY_ID("PromptTextWrapper"), {
+                            .layout = {
+                                .sizing = {.width = CLAY_SIZING_FIXED(460), .height = CLAY_SIZING_FIT(0)},
+                            }
+                        }) {
+                             CLAY_TEXT(
+                             CLAY_STRING("Do you want to save?"), 
+                             CLAY_TEXT_CONFIG({
+                                .fontSize = 32, 
+                                .textColor = DARK_GRAY_CLAY, 
+                                .textAlignment = CLAY_TEXT_ALIGN_CENTER,
+                                .wrapMode = true,
+                             })
+                             );
+                        }
+
+                        CLAY(CLAY_ID("PromptButtons"), {
+                            .layout = {
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                            .sizing = {.width = CLAY_SIZING_FIT(0), .height = CLAY_SIZING_FIXED(50)},
+                            .childGap = 20
+                        }}) {
+                            if (ButtonComponent(CLAY_STRING("Save"), CLAY_STRING("SaveBtn"), &cursor, 130.0, (Clay_Color)COLOR_BLUE)){
+                                HandleFileSave(&editor);
+                                exit = true;
+                            }
+                            if (ButtonComponent(CLAY_STRING("Discard"), CLAY_STRING("DiscardBtn"), &cursor, 130.0, (Clay_Color)DARK_GRAY_CLAY)){
+                                exit = true;
+                            }
+                            if (ButtonComponent(CLAY_STRING("Cancel"), CLAY_STRING("CancelBtn"), &cursor, 130.0, (Clay_Color)COLOR_ORANGE)) {
+                                editor.editorMode = MODE_NORMAL;
+                            }
+                        }
                     }
                 }
             }
@@ -267,6 +408,7 @@ int main(int argc, char *argv[]) {
         Clay_RenderCommandArray renderCommands = Clay_EndLayout();
 
         Clay_ElementData textBoxData =  Clay_GetElementData(Clay_GetElementId(CLAY_STRING("TextBox")));
+        Clay_ElementData searchBoxData =  Clay_GetElementData(Clay_GetElementId(CLAY_STRING("SearchBox")));
         Clay_ElementData gutterData =  Clay_GetElementData(Clay_GetElementId(CLAY_STRING("Gutter")));
         Clay_ElementData scrollBarData = Clay_GetElementData(Clay_GetElementId(CLAY_STRING("ScrollBar")));
 
@@ -274,6 +416,11 @@ int main(int argc, char *argv[]) {
         editor.textBox.y = textBoxData.boundingBox.y;
         editor.textBox.width = textBoxData.boundingBox.width;
         editor.textBox.height = textBoxData.boundingBox.height;
+
+        editor.searchBox.x = searchBoxData.boundingBox.x;
+        editor.searchBox.y = searchBoxData.boundingBox.y;
+        editor.searchBox.width = searchBoxData.boundingBox.width;
+        editor.searchBox.height = searchBoxData.boundingBox.height;
 
         editor.gutter.x = gutterData.boundingBox.x;
         editor.gutter.y = gutterData.boundingBox.y;
@@ -288,19 +435,16 @@ int main(int argc, char *argv[]) {
 
         SetMouseCursor(cursor);
 
-        BeginDrawing();
-        Clay_Raylib_Render(renderCommands, fonts);
-
         if (IsWindowResized()) {
             editor.isUpdateNeeded = true;
         }
 
         if (editor.isUpdateNeeded) {
             scratchArena.used = 0;
-            editor.syntaxTokens.items = (syntax_token_t *) arena_alloc(&scratchArena, textBuffer.capacity * (sizeof(syntax_token_t)));
+            editor.syntaxTokens.items = (syntax_token_t *) arena_alloc(&scratchArena, (textBuffer.size + 1) * (sizeof(syntax_token_t)));
             editor.syntaxTokens.count = 0;
 
-            textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, textBuffer.capacity * sizeof(int));
+            textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, (textBuffer.size + 1) * sizeof(int));
             textBuffer.rowList.count = 0;
 
             calculate_syntax_highlights(&textBuffer, keywords, &editor.syntaxTokens);
@@ -309,11 +453,18 @@ int main(int argc, char *argv[]) {
         }
         UpdateCursorPosition(&editor);
         HandleScroll(&editor);
+        HandleFileDrop(&editor);
 
+        BeginDrawing();
+        ClearBackground((Color)DARK_GRAY_CLAY);
         RenderText(&editor);
+        if (editor.editorMode == MODE_SEARCH) {
+            RenderSearchBarText(&editor);
+        }
         RenderScrollbar(&editor, scrollBarData);
 
-        HandleFileDrop(&editor);
+        Clay_Raylib_Render(renderCommands, fonts);
+
 
         if (!IsWindowFocused()) {
             long fileModTime = GetFileModTime(editor.currentFilePath);
@@ -339,7 +490,7 @@ int main(int argc, char *argv[]) {
 
     UnloadFont(editor.font);
     UnloadFont(editor.fallbackFont);
-    UnloadFont(gutterFont);
+    UnloadFont(editor.gutterFont);
     UnloadImage(icon);
     CloseWindow();
 
@@ -350,35 +501,14 @@ int main(int argc, char *argv[]) {
 }
 
 void UpdateEditor(Editor* editor, Clay_ElementData elementData) {
-    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_F)) {
-        MaximizeWindow();
-    }
-
     HandleKeyboardInput(editor);
     HandleMouseEvents(editor, elementData);
 
     editor->frameCounter++;
-    int key = GetCharPressed();
-
-    while (key > 0) {
-        int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
-        int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
-        if (start != end) {
-            RecordDeleteAction(editor, start, (end - start));
-            buffer_delete_range(editor->textBuffer, start, end);
-        }
-
-        int byteSize = 0;
-        const char *utf8Symbol = buffer_codepoint_to_utf8(key, &byteSize);
-        RecordInsertAction(editor, utf8Symbol, byteSize);
-
-        buffer_insert_bytes(editor->textBuffer, utf8Symbol, byteSize);
-        editor->isUpdateNeeded = true;
-        key = GetCharPressed();
-    }
+    
 }
 
-void DrawCursor(Editor *editor, Vector2 position) {
+void DrawCursor(Editor *editor, Vector2 position, Color color) {
     Rectangle cursor = {
         .x = position.x, 
         .y = position.y, 
@@ -387,7 +517,7 @@ void DrawCursor(Editor *editor, Vector2 position) {
     };
 
     if (editor->frameCounter/20 % 2 == 0) {
-        DrawRectangleRec(cursor, WHITE);
+        DrawRectangleRec(cursor, color);
     }
 }
 
@@ -399,7 +529,9 @@ void RenderText(Editor *editor) {
         .y = editor->cursorPosition.y + editor->textBox.y - editor->scrollOffset
     };
 
-    DrawCursor(editor, cursorScreenPosition);
+    if (editor->editorMode == MODE_NORMAL) {
+        DrawCursor(editor, cursorScreenPosition, WHITE);
+    }
 
     Color currentColor = WHITE;
 
@@ -470,10 +602,51 @@ void RenderText(Editor *editor) {
     }
     EndScissorMode();
 
-    Vector2 gutterPos = {
-        .x = editor->gutter.x + ((float) GUTTER_WIDTH / 2),
+    RenderGutter(editor);
+}
+
+void RenderSearchBarText(Editor *editor) {
+    DrawRectangleRec(editor->searchBox, LIGHTGRAY);
+
+    int currentX = editor->searchBox.x;
+    int i = 0;
+
+    BeginScissorMode((int)editor->searchBox.x, (int)editor->searchBox.y, (int)editor->searchBox.width, (int)editor->searchBox.height);
+    while (true) {
+        char *ptr = editor->searchBuffer->input + i;
+        if (*ptr == '\0') break;
+        int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
+        Font *font = GetFontForCodepoint(editor, nextCodePoint);
+
+        Vector2 position = (Vector2) {
+            .x = currentX,
+            .y = editor->searchBox.y,
+        };
+
+        DrawTextCodepoint(*font, nextCodePoint, position, editor->fontSize, BLACK);
+
+        int index = GetGlyphIndex(*font, nextCodePoint);
+        currentX += font->glyphs[index].advanceX;
+
+        i += editor->codepointSize;
+    }
+    EndScissorMode();
+
+    Vector2 cursorPosition = (Vector2) {
+        .x = currentX,
+        .y = editor->searchBox.y,
     };
-    
+
+    DrawCursor(editor, cursorPosition, BLACK);
+
+}
+
+void RenderGutter(Editor *editor) {
+    DrawRectangleRec(editor->gutter, GUTTER_COLOR);
+
+    text_buffer_t *buffer = editor->textBuffer;
+    Vector2 gutterPos = {0};
+
     BeginScissorMode(editor->gutter.x, editor->gutter.y, editor->gutter.width, editor->gutter.height);
     int lineNumber = 1;
     for (int i = 0; i < buffer->rowList.count; i++) {
@@ -488,7 +661,9 @@ void RenderText(Editor *editor) {
 
         if (i == 0 || buffer->input[buffer->rowList.items[i] - 1] == '\n') {
             gutterPos.y = y;
-            DrawTextEx(gutterFont, TextFormat("%d", lineNumber), gutterPos, editor->fontSize, 1, LIGHTGRAY);
+            Vector2 pos = MeasureTextEx(editor->gutterFont, TextFormat("%d", lineNumber), editor->fontSize, 1);
+            gutterPos.x = editor->gutterWidth - pos.x - 10;
+            DrawTextEx(editor->gutterFont, TextFormat("%d", lineNumber), gutterPos, editor->fontSize, 1, LIGHTGRAY);
         }
 
     }
@@ -513,6 +688,38 @@ void HandleScroll(Editor *editor) {
 }
 
 void HandleKeyboardInput(Editor *editor) {
+    switch (editor->editorMode) {
+        case MODE_NORMAL:
+            HandleNormalMode(editor);
+        break;
+        case MODE_SEARCH:
+            HandleSearchMode(editor);
+        break;
+        case MODE_PROMPT:
+            HandlePromptMode(editor);
+        break;
+    }
+}
+void HandleNormalMode(Editor *editor) {
+
+    // get user input
+    int key = GetCharPressed();
+    while (key > 0) {
+        int start = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        int end = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        if (start != end) {
+            RecordDeleteAction(editor, start, (end - start));
+            buffer_delete_range(editor->textBuffer, start, end);
+        }
+
+        int byteSize = 0;
+        const char *utf8Symbol = buffer_codepoint_to_utf8(key, &byteSize);
+        RecordInsertAction(editor, utf8Symbol, byteSize);
+
+        buffer_insert_bytes(editor->textBuffer, utf8Symbol, byteSize);
+        editor->isUpdateNeeded = true;
+        key = GetCharPressed();
+    }
 
     if (IsKeyPressed(KEY_ESCAPE)) {
         editor->isSearchingCursor = true;
@@ -540,7 +747,7 @@ void HandleKeyboardInput(Editor *editor) {
         }
     }
 
-    if ((IsKeyPressedRepeat(KEY_RIGHT) || IsKeyPressed(KEY_RIGHT)) && editor->textBuffer->cursorByteOffset < editor->textBuffer->size) {
+    if ((IsKeyPressedRepeat(KEY_RIGHT) || IsKeyPressed(KEY_RIGHT)) && editor->textBuffer->cursorByteOffset < (int) editor->textBuffer->size) {
         editor->isSearchingCursor = true;
         int byteSize = 0;
         GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
@@ -588,7 +795,7 @@ void HandleKeyboardInput(Editor *editor) {
 
         int endOfCurrentLine = buffer_get_line_end(editor->textBuffer->input, editor->textBuffer->cursorByteOffset, editor->textBuffer->size);
 
-        if (endOfCurrentLine >= editor->textBuffer->size) return;
+        if (endOfCurrentLine >= (int) editor->textBuffer->size) return;
 
         int startOfNextLine =  endOfCurrentLine + 1;
 
@@ -650,7 +857,7 @@ void HandleKeyboardInput(Editor *editor) {
             buffer_delete_range(editor->textBuffer, start, end);
             editor->isUpdateNeeded = true;
         } else {
-            if (editor->textBuffer->cursorByteOffset >= editor->textBuffer->size) return;
+            if (editor->textBuffer->cursorByteOffset >= (int) editor->textBuffer->size) return;
 
             int byteSize = 0;
             GetCodepoint(&editor->textBuffer->input[editor->textBuffer->cursorByteOffset], &byteSize);
@@ -730,17 +937,67 @@ void HandleKeyboardInput(Editor *editor) {
         }
     }
 
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_F)) {
+
+        editor->editorMode = MODE_SEARCH;
+        editor->searchBuffer->size = 0;
+        editor->searchBuffer->cursorByteOffset = 0;
+        editor->searchBuffer->input[0] = '\0';
+    }
+
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_A)) {
         editor->textBuffer->cursorByteOffset = 0;
         editor->textBuffer->selectionAnchor = editor->textBuffer->size;
     }
     
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
-        HandelFileSave(editor);
+        HandleFileSave(editor);
     }
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_O)) {
         HandleFileOpen(editor);
+    }
+
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_EQUAL)) {
+        Zoom(editor, 2.0);
+    }
+
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_MINUS)) {
+        Zoom(editor, -2.0);
+    }
+
+}
+void HandleSearchMode(Editor *editor) {
+    // get user input
+    int key = GetCharPressed();
+    while (key > 0) {
+        int byteSize = 0;
+        const char *utf8Symbol = buffer_codepoint_to_utf8(key, &byteSize);
+        buffer_insert_bytes(editor->searchBuffer, utf8Symbol, byteSize);
+        FindNextMatch(editor, 0);
+        editor->isUpdateNeeded = true;
+        key = GetCharPressed();
+    }
+
+
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        editor->editorMode = MODE_NORMAL;
+    }
+
+    if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+        buffer_delete_character(editor->searchBuffer);
+        FindNextMatch(editor, 0);
+        editor->isUpdateNeeded = true;
+    }
+
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER)) {
+        FindNextMatch(editor, editor->textBuffer->selectionAnchor);
+    }
+}
+
+void HandlePromptMode(Editor *editor) {
+    if(IsKeyPressed(KEY_ESCAPE)) {
+        editor->editorMode = MODE_NORMAL;
     }
 }
 
@@ -760,25 +1017,10 @@ void HandleMouseEvents(Editor *editor, Clay_ElementData elementData) {
     }
 
     float mouseWheelMove = GetMouseWheelMove();
-    if (mouseWheelMove != 0) {
-        if (IsKeyDown(KEY_LEFT_CONTROL)) {
-            int oldFontSize = editor->fontSize;
-            int sizeIncrement = editor->fontSize + (int)(mouseWheelMove * 3);
-            int newFontSize = min(max(40, sizeIncrement), 120);
-            editor->fontSize = newFontSize;
-            float scale = 1.0 * newFontSize / oldFontSize;
-
-            if (newFontSize != oldFontSize) {
-                HandleFontLoad(&editor->font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
-                HandleFontLoad(&gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
-                HandleFontLoad(&editor->fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor->fontSize,editor->codepointsGeo, editor->codepointsCountGeo);
-                editor->isUpdateNeeded = true;
-                editor->scrollOffset *= scale;
-            }
-        } else {
-            editor->scrollOffset -= mouseWheelMove * editor->fontSize;
-            editor->isSearchingCursor = false;
-        }
+    if (IsKeyDown(KEY_LEFT_CONTROL)) {
+        Zoom(editor, mouseWheelMove);
+    } else {
+        Scroll(editor, mouseWheelMove);
     }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -903,6 +1145,7 @@ void UpdateTextLayout(Editor *editor) {
 
         if (nextCodePoint == '\0') break;
 
+
         if (isNewLine) {
             layoutCursor.x = TEXT_OFFSET_X;
             layoutCursor.y += editor->fontSize;
@@ -919,6 +1162,11 @@ void UpdateTextLayout(Editor *editor) {
         } 
         ptr += editor->codepointSize;
     }
+    double digit_count = floor(log10(editor->textBuffer->rowList.count)) + 1;
+    int charIndex = GetGlyphIndex(editor->gutterFont, '0');
+    int charWidth = editor->gutterFont.glyphs[charIndex].advanceX;
+    editor->gutterWidth = max(150.0, charWidth * digit_count + 20.0);
+
     editor->totalContentHeight = layoutCursor.y + editor->fontSize + PADDING;
 }
 
@@ -982,11 +1230,11 @@ Font* GetFontForCodepoint(Editor *editor, int codepoint) {
     return &editor->font;
 }
 
-bool MenuElementComponent(Clay_String text, Clay_String id, int *cursor) {
+bool ButtonComponent(Clay_String text, Clay_String id, int *cursor, float width, Clay_Color color) {
     bool clicked = false;
-    CLAY(CLAY_SID(id), {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(150), .height = CLAY_SIZING_GROW(0)},
+    CLAY(CLAY_SID(id), {.layout = {.sizing = {.width = CLAY_SIZING_FIXED(width), .height = CLAY_SIZING_GROW(0)},
          .padding = CLAY_PADDING_ALL(10)},
-         .backgroundColor = GUTTER_COLOR_CLAY}) {
+         .backgroundColor = color}) {
         bool hovered = Clay_Hovered();
         if (hovered) {
             *cursor = MOUSE_CURSOR_POINTING_HAND;
@@ -1002,17 +1250,26 @@ bool MenuElementComponent(Clay_String text, Clay_String id, int *cursor) {
 }
 
 void RenderScrollbar(Editor *editor, Clay_ElementData elementData) {
+    Rectangle scrollBg = {
+        .x = elementData.boundingBox.x, 
+        .y = elementData.boundingBox.y, 
+        .width = elementData.boundingBox.width, 
+        .height = elementData.boundingBox.height
+    };
+    DrawRectangleRec(scrollBg, GUTTER_COLOR);
+
     if (!elementData.found) return;
 
     if (editor->totalContentHeight > editor->textBox.height) {
+        float height =max((editor->textBox.height / editor->totalContentHeight) * elementData.boundingBox.height, 10);
         Rectangle rec = (Rectangle) {
-            .height = (editor->textBox.height / editor->totalContentHeight) * elementData.boundingBox.height,
+            .height = height,
             .width = elementData.boundingBox.width,
             .x = elementData.boundingBox.x,
             .y = elementData.boundingBox.y + (editor->scrollOffset / editor->totalContentHeight * elementData.boundingBox.height)
         };
 
-        DrawRectangleRounded(rec, 0.5, 1, GRAY);
+        DrawRectangleRounded(rec, 0.5, 1, WHITE);
     }
 }
 
@@ -1053,7 +1310,7 @@ bool IsSeparator(int codepoint) {
     return false;
 }
 
-void HandelFileSave(Editor *editor) {
+void HandleFileSave(Editor *editor) {
     char *targetPath = NULL;
     if (editor->currentFilePath[0] == '\0' || editor->lastModificationTime != GetFileModTime(editor->currentFilePath)) {
         const char *defaultName = "new_file.txt";
@@ -1158,4 +1415,49 @@ void RecordInsertAction(Editor *editor, const char *text, int length) {
         .text = (char *)text,
     };
     record_action(&editor->historyBuffer, action);
+}
+
+void FindNextMatch(Editor *editor, int startOffset) {
+    if (editor->searchBuffer->size > 0) {
+        char *matchingPtr = strstr(editor->textBuffer->input + startOffset, editor->searchBuffer->input);
+        if (matchingPtr != NULL) {
+            int matchingOffset = matchingPtr - editor->textBuffer->input;
+            editor->textBuffer->cursorByteOffset = matchingOffset;
+            editor->textBuffer->selectionAnchor = matchingOffset + editor->searchBuffer->size;
+            editor->isSearchingCursor = true;
+        } else {
+            editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+            if (startOffset > 0) {
+                FindNextMatch(editor, 0);
+            }
+        }
+    } else {
+        editor->textBuffer->selectionAnchor = editor->textBuffer->cursorByteOffset;
+    }
+}
+
+void Zoom(Editor *editor, float zoomAmt) {
+    if (zoomAmt!= 0) {
+        int oldFontSize = editor->fontSize;
+        int sizeIncrement = editor->fontSize + (int)(zoomAmt * 3);
+        int newFontSize = min(max(40, sizeIncrement), 120);
+        editor->fontSize = newFontSize;
+        float scale = 1.0 * newFontSize / oldFontSize;
+
+        if (newFontSize != oldFontSize) {
+            HandleFontLoad(&editor->font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
+            HandleFontLoad(&editor->gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor->fontSize, editor->codepointsASCII, editor->codepointsCountASCII);
+            HandleFontLoad(&editor->fallbackFont, NotoSansGeorgian_Regular_ttf, NotoSansGeorgian_Regular_ttf_len, editor->fontSize,editor->codepointsGeo, editor->codepointsCountGeo);
+            editor->isUpdateNeeded = true;
+            editor->scrollOffset *= scale;
+            editor->isSearchingCursor = true;
+        }
+    }
+}
+
+void Scroll(Editor *editor, float scrollAmt) {
+    if (scrollAmt != 0) {
+        editor->scrollOffset -= scrollAmt * editor->fontSize;
+        editor->isSearchingCursor = false;
+    }
 }
