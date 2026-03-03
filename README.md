@@ -31,6 +31,7 @@ For this project I tried to use very few external libraries. They are:
 - Supports undo/redo using `Ctrl` + `Z` and `Ctrl` + `Y`
 - Searching functionality - `Ctrl` + `F` triggers search bar, from which you can search in editor
 - If you have unsaved changes and try to close editor, popup prompt will appear to ask you to save, discard or cancel
+- When you double click in the word, it highlights whole word. When you triple click in the line, it highlights whole line
 
 ![Editor screenshot](resources/screenshots/main.png)
 

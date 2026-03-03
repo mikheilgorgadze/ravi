@@ -10,6 +10,7 @@
 #include "file_io.h"
 #include "render.h"
 #include "ui.h"
+#include "utils.h"
 #include "../resources/fonts/firacode.h"
 #include "../resources/fonts/notosans.h"
 #include "../resources/logo.h"
@@ -56,15 +57,17 @@ int main(int argc, char *argv[]) {
 
     text_buffer_t textBuffer = {
         .capacity = MAX_INPUT_CHAR,
-        .cursorByteOffset = 0,
-        .size = 0,
-        .isSaved = true,
+        .gapStart = 0,
+        .gapEnd   = MAX_INPUT_CHAR,
+        .size     = 0,
+        .isSaved  = true,
     };
 
     text_buffer_t searchBuffer = {
         .capacity = 256,
-        .cursorByteOffset = 0,
-        .size = 0
+        .gapStart = 0,
+        .gapEnd   = 256,
+        .size     = 0
     };
 
     textBuffer.input = (char *) arena_alloc(&textInputArena, textBuffer.capacity);
@@ -80,15 +83,18 @@ int main(int argc, char *argv[]) {
         .height = 1200,
         .codepointsCountASCII = 0,
         .codepointsCountGeo = 0,
-        .fontSize = 40,
+        .fontSize = 70,
         .codepointSize = 0,
         .frameCounter = 0,
         .scrollOffset = 0.0,
         .gutterWidth = 150.0,
+        .lastClickTime = 0.0,
+        .clickCount = 0,
         .isSearchingCursor = false,
         .editorMode = MODE_NORMAL,
         .mouseOnText = false,
         .isUpdateNeeded = true,
+        .isAutoSelecting = false,
         .textBuffer = &textBuffer,
         .searchBuffer = &searchBuffer,
         .historyBuffer = {
@@ -112,14 +118,14 @@ int main(int argc, char *argv[]) {
     //add georgian unicode character range to codepoints
     for (int i = 0x10A0; i < 0x10FF; i++) editor.codepointsGeo[editor.codepointsCountGeo++] = i;
 
+    arena_initialize(&editor.frameArena, 16 * 1024);
+
+    ui_initialize(editor.width, editor.height, editor.title);
 
     SetTargetFPS(60);
     SetExitKey(0);
-
     Image icon = LoadImageFromMemory(".png", edit_png, edit_png_len);
     SetWindowIcon(icon);
-
-    ui_initialize(editor.width, editor.height, editor.title);
 
     editor_handle_font_load(&editor.font, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
     editor_handle_font_load(&editor.gutterFont, FiraCode_Regular_ttf, FiraCode_Regular_ttf_len, editor.fontSize, editor.codepointsASCII, editor.codepointsCountASCII);
@@ -166,14 +172,27 @@ int main(int argc, char *argv[]) {
 
         if (editor.isUpdateNeeded) {
             scratchArena.current->used = 0;
-            editor.syntaxTokens.items = (syntax_token_t *) arena_alloc(&scratchArena, (textBuffer.size + 1) * (sizeof(syntax_token_t)));
+            textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, (textBuffer.size + 1) * sizeof(int));
+            editor_update_text_layout(&editor);
+
+            int startRow = max(0, (int)(editor.scrollOffset / editor.fontSize));
+            int visibleRowCount = (editor.textBox.height / editor.fontSize) + 2;
+            int endRow = min(textBuffer.rowList.count - 1, startRow + visibleRowCount);
+
+            int startIndex = 0;
+            if (textBuffer.rowList.count > 0) {
+                startIndex = textBuffer.rowList.items[startRow];
+            }
+
+            int endIndex = textBuffer.size;
+            if (endRow < textBuffer.rowList.count - 1) {
+                endIndex = textBuffer.rowList.items[endRow + 1];
+            }
+
+            editor.syntaxTokens.items = (syntax_token_t *) arena_alloc(&scratchArena, (endIndex - startIndex + 1) * sizeof(syntax_token_t));
             editor.syntaxTokens.count = 0;
 
-            textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, (textBuffer.size + 1) * sizeof(int));
-            textBuffer.rowList.count = 0;
-
-            calculate_syntax_highlights(&textBuffer, keywords, &editor.syntaxTokens);
-            editor_update_text_layout(&editor);
+            calculate_syntax_highlights(&textBuffer, keywords, &editor.syntaxTokens, startIndex, endIndex);
             editor.isUpdateNeeded = false;
         }
 
@@ -214,6 +233,7 @@ int main(int argc, char *argv[]) {
         }
 
         EndDrawing();
+        arena_reset(&editor.frameArena);
     }
 
     UnloadFont(editor.font);
@@ -224,6 +244,7 @@ int main(int argc, char *argv[]) {
 
     arena_free(&textInputArena);
     arena_free(&scratchArena);
+    arena_free(&editor.frameArena);
 
     return 0;
 }

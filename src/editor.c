@@ -1,4 +1,5 @@
 #include "editor.h"
+#include "buffer.h"
 #include "stdlib.h"
 #include "string.h"
 #include "utils.h"
@@ -9,8 +10,11 @@ void editor_record_delete_action(editor_t *editor, int startOffset, int length) 
     if (length <= 0) return;
 
     char *text = malloc(length + 1);
-    memcpy(text, editor->textBuffer->input + startOffset, length);
+    for (int i = 0; i < length; i++) {
+        text[i] = buffer_get_char_at(editor->textBuffer, startOffset + i);
+    }
     text[length] = '\0';
+
     action_t action = {
         .type = ACTION_DELETE,
         .length = length,
@@ -25,7 +29,7 @@ void editor_record_insert_action(editor_t *editor, const char *text, int length)
     action_t action = {
         .type = ACTION_INSERT,
         .length = length,
-        .offset = editor->textBuffer->cursorByteOffset,
+        .offset = editor->textBuffer->gapStart,
         .text = (char *)text,
     };
     record_action(&editor->historyBuffer, action);
@@ -62,6 +66,7 @@ void editor_update(editor_t* editor, Rectangle *scrollBarRec) {
 }
 
 void editor_handle_scroll(editor_t *editor) {
+    float oldScroll = editor->scrollOffset;
     float maxScroll = editor->totalContentHeight - editor->textBox.height;
     if (maxScroll < 0) maxScroll = 0;
     if (editor->scrollOffset > maxScroll) editor->scrollOffset = maxScroll;
@@ -76,74 +81,36 @@ void editor_handle_scroll(editor_t *editor) {
             editor->scrollOffset = editor->cursorPosition.y;
         }
     }
+
+    if (editor->scrollOffset != oldScroll) {
+        editor->isUpdateNeeded = true;
+    }
 }
 
 void editor_update_text_layout(editor_t *editor) {
     editor->textBuffer->rowList.count = 0;
     buffer_push_to_row_list(&editor->textBuffer->rowList, 0);
 
-    char *ptr = editor->textBuffer->input;
-    bool running = true;
-
-    Vector2 layoutCursor = {.x = TEXT_OFFSET_X, .y = TEXT_OFFSET_Y};
-
-    while (running) {
-        int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
-        Font *font = editor_get_font_for_codepoint(editor, nextCodePoint);
-
-        if (nextCodePoint == '\0') {
-            running = false; 
+    int size = (int) editor->textBuffer->size;
+    for (int i = 0; i < size; i++) {
+        if (buffer_get_char_at(editor->textBuffer, i) == '\n') {
+            buffer_push_to_row_list(&editor->textBuffer->rowList, i + 1);
         }
-
-        int charWidth = 0;
-        bool isNewLine = (nextCodePoint == '\n');
-        bool isTab = (nextCodePoint == '\t');
-
-        if (nextCodePoint != '\0') {
-            int index = GetGlyphIndex(*font, nextCodePoint);
-            charWidth = font->glyphs[index].advanceX;
-        }
-
-        if (!isNewLine && nextCodePoint != '\0' && (layoutCursor.x + charWidth > editor->textBox.width)) {
-            layoutCursor.x = TEXT_OFFSET_X;
-            layoutCursor.y += editor->fontSize;
-
-            int currentIndex = (int) (ptr - editor->textBuffer->input);
-            buffer_push_to_row_list(&editor->textBuffer->rowList, currentIndex);
-        }
-
-        if (nextCodePoint == '\0') break;
-
-
-        if (isNewLine) {
-            layoutCursor.x = TEXT_OFFSET_X;
-            layoutCursor.y += editor->fontSize;
-
-            int nextIndex = (int) (ptr - editor->textBuffer->input) + 1;
-            buffer_push_to_row_list(&editor->textBuffer->rowList, nextIndex);
-        } else if (isTab) {
-            int index = GetGlyphIndex(editor->font, ' ');
-            int spaceWidth = editor->font.glyphs[index].advanceX;
-            int advance = (4 - ((int) (layoutCursor.x / spaceWidth) % 4)) * spaceWidth;
-            layoutCursor.x += advance; 
-        } else {
-            layoutCursor.x += charWidth;
-        } 
-        ptr += editor->codepointSize;
     }
-    double digit_count = floor(log10(editor->textBuffer->rowList.count)) + 1;
+    int count = editor->textBuffer->rowList.count;
+    double digit_count = floor(log10(count > 0 ? count : 1)) + 1;
     int charIndex = GetGlyphIndex(editor->gutterFont, '0');
     int charWidth = editor->gutterFont.glyphs[charIndex].advanceX;
     editor->gutterWidth = max(150.0, charWidth * digit_count + 20.0);
 
-    editor->totalContentHeight = layoutCursor.y + editor->fontSize + PADDING;
+    editor->totalContentHeight = editor->textBuffer->rowList.count * editor->fontSize + PADDING;
 }
 
 void editor_update_cursor_position(editor_t *editor) {
     int i = 0;
     for (i = 0; i < editor->textBuffer->rowList.count; i++) {
         if (i == editor->textBuffer->rowList.count - 1) break;
-        if (editor->textBuffer->cursorByteOffset < editor->textBuffer->rowList.items[i + 1]) {
+        if (editor->textBuffer->gapStart < editor->textBuffer->rowList.items[i + 1]) {
             break;
         }
     }
@@ -154,8 +121,10 @@ void editor_update_cursor_position(editor_t *editor) {
     int j = editor->textBuffer->rowList.items[i];
     int codepointSize;
     int codepoint;
-    while (j < editor->textBuffer->cursorByteOffset) {
-        codepoint = GetCodepoint(&editor->textBuffer->input[j], &codepointSize);
+    while (j < editor->textBuffer->gapStart) {
+        char temp[5] = {0};
+        buffer_read_utf8_sequence(editor->textBuffer, j, temp);
+        codepoint = GetCodepoint(temp, &codepointSize);
         if (codepoint == '\n') break;
         if (codepoint == '\t') {
             int index = GetGlyphIndex(editor->font, ' ');

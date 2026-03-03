@@ -40,6 +40,6 @@ typedef struct {
     int count;
 } syntax_token_list_t;
 
-void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords, syntax_token_list_t *syntaxTokens);
+void calculate_syntax_highlights(text_buffer_t *textBuffer, keyword_t *keywords, syntax_token_list_t *syntaxTokens, int startIndex, int endIndex);
 
 #endif

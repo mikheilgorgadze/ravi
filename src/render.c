@@ -1,4 +1,5 @@
 #include "render.h"
+#include "buffer.h"
 #include "utils.h"
 
 Color color_theme[10] = {
@@ -53,11 +54,12 @@ void render_text(editor_t *editor) {
 
         float currentX = TEXT_OFFSET_X;
 
-        int highlightStart = min(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
-        int highlightEnd = max(editor->textBuffer->cursorByteOffset, editor->textBuffer->selectionAnchor);
+        int highlightStart = min(editor->textBuffer->gapStart, editor->textBuffer->selectionAnchor);
+        int highlightEnd = max(editor->textBuffer->gapStart, editor->textBuffer->selectionAnchor);
         while (start < end) {
-            char *ptr = buffer->input + start;
-            int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
+            char temp[5] = {0};
+            buffer_read_utf8_sequence(buffer, start, temp);
+            int nextCodePoint = GetCodepoint(temp, &editor->codepointSize);
             Font *font = editor_get_font_for_codepoint(editor, nextCodePoint);
 
             if (nextCodePoint == '\n') {
@@ -117,7 +119,7 @@ void render_gutter(editor_t *editor) {
     BeginScissorMode(editor->gutter.x, editor->gutter.y, editor->gutter.width, editor->gutter.height);
     int lineNumber = 1;
     for (int i = 0; i < buffer->rowList.count; i++) {
-        if (i > 0 && buffer->input[buffer->rowList.items[i] - 1] == '\n') {
+        if (i > 0 && buffer_get_char_at(buffer, buffer->rowList.items[i] - 1) == '\n') {
            lineNumber ++; 
         }
 
@@ -126,7 +128,7 @@ void render_gutter(editor_t *editor) {
             continue;
         }
 
-        if (i == 0 || buffer->input[buffer->rowList.items[i] - 1] == '\n') {
+        if (i == 0 || buffer_get_char_at(buffer, buffer->rowList.items[i] - 1) == '\n') {
             gutterPos.y = y;
             Vector2 pos = MeasureTextEx(editor->gutterFont, TextFormat("%d", lineNumber), editor->fontSize, 1);
             gutterPos.x = editor->gutterWidth - pos.x - 10;
@@ -145,9 +147,10 @@ void render_search_bar_text(editor_t *editor) {
 
     BeginScissorMode((int)editor->searchBox.x, (int)editor->searchBox.y, (int)editor->searchBox.width, (int)editor->searchBox.height);
     while (true) {
-        char *ptr = editor->searchBuffer->input + i;
-        if (*ptr == '\0') break;
-        int nextCodePoint = GetCodepointNext(ptr, &editor->codepointSize);
+        char temp[5] = {0};
+        buffer_read_utf8_sequence(editor->searchBuffer, i, temp);
+        if (*temp == '\0') break;
+        int nextCodePoint = GetCodepoint(temp, &editor->codepointSize);
         Font *font = editor_get_font_for_codepoint(editor, nextCodePoint);
 
         Vector2 position = (Vector2) {

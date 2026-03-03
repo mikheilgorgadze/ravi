@@ -1,5 +1,6 @@
 #include "file_io.h"
 #include "../lib/tinyfiledialogs.h"
+#include "buffer.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -70,7 +71,7 @@ void fileio_clear_editor(editor_t *editor) {
 
     editor->textBuffer->size = 0;
     editor->textBuffer->rowList.count = 0;
-    editor->textBuffer->cursorByteOffset = 0;
+    buffer_move_gap(editor->textBuffer, 0);
     editor->textBuffer->selectionAnchor = 0;
     editor->scrollOffset = 0;
 

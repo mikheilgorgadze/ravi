@@ -29,6 +29,9 @@ typedef struct {
     float scrollOffset;
     float totalContentHeight;
 
+    double lastClickTime;
+    int clickCount;
+
     text_buffer_t *searchBuffer;
     editor_mode_t editorMode;
 
@@ -41,11 +44,14 @@ typedef struct {
     syntax_token_list_t syntaxTokens;
     history_buffer_t historyBuffer;
 
+    arena_t frameArena;
+
     bool isSearchingCursor;
     bool isScrolling;
     bool mouseOnText;
     bool isUpdateNeeded;
     bool fontsNeedReload;
+    bool isAutoSelecting;
 
     Font font;
     Font gutterFont;
