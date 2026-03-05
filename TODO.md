@@ -1,0 +1,3 @@
+- [ ] Make syntax highlighting more robust
+- [ ] Add auto-indentation
+- [ ] Add search and replace functionality
