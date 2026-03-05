@@ -1,11 +1,13 @@
 #include "input.h"
 #include "buffer.h"
+#include "editor.h"
 #include "utils.h"
 #include "string.h"
 #include "file_io.h"
 
 #include "stdlib.h"
 #include <raylib.h>
+#include <stdio.h>
 
 void input_handle_keyboard(editor_t *editor) {
     switch (editor->editorMode) {
@@ -327,7 +329,6 @@ void input_handle_prompt_mode(editor_t *editor) {
     }
 }
 
-
 void input_zoom(editor_t *editor, float zoomAmt) {
     if (zoomAmt!= 0) {
         int oldFontSize = editor->fontSize;
@@ -339,7 +340,7 @@ void input_zoom(editor_t *editor, float zoomAmt) {
         if (newFontSize != oldFontSize) {
             editor->fontsNeedReload = true;
             editor->isUpdateNeeded = true;
-            editor->scrollOffset *= scale;
+            editor->scrollOffsetY *= scale;
             editor->isSearchingCursor = true;
         }
     }
@@ -347,7 +348,7 @@ void input_zoom(editor_t *editor, float zoomAmt) {
 
 void input_scroll(editor_t *editor, float scrollAmt) {
     if (scrollAmt != 0) {
-        editor->scrollOffset -= scrollAmt * editor->fontSize;
+        editor->scrollOffsetY -= scrollAmt * editor->fontSize;
         editor->isSearchingCursor = false;
         editor->isUpdateNeeded = true;
     }
@@ -427,7 +428,6 @@ void input_handle_mouse_events(editor_t *editor, Rectangle *scrollBarRec) {
             }
             editor->lastClickTime = currentTime;
         }
-
     }
 
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
@@ -438,12 +438,32 @@ void input_handle_mouse_events(editor_t *editor, Rectangle *scrollBarRec) {
             float targetScroll = max(editor->totalContentHeight * percentage, 0);
             float newScroll = min(targetScroll, maxScroll);
 
-            if (editor->scrollOffset != newScroll) {
-                editor->scrollOffset = newScroll;
+            if (editor->scrollOffsetY != newScroll) {
+                editor->scrollOffsetY = newScroll;
                 editor->isUpdateNeeded = true;
             }
-
         } else if (!editor->isAutoSelecting) {
+            float mouseX = GetMouseX();
+            
+            float rightEdge = editor->textBox.x + editor->textBox.width;
+            float leftEdge = editor->textBox.x + editor->gutterWidth;
+
+            float maxScrollX = max((editor->maxContentWidth - editor->textBox.width + 50.0f), 0);
+
+            if (mouseX > rightEdge) {
+                float diff   = mouseX - rightEdge;
+                editor->scrollOffsetX += diff * 10.0f * GetFrameTime();
+                if (editor->scrollOffsetX > maxScrollX) {
+                    editor->scrollOffsetX = maxScrollX;
+                }
+            } else if (mouseX < leftEdge) {
+                float diff   = leftEdge - mouseX;
+                editor->scrollOffsetX -= diff * 10.0f * GetFrameTime();
+                if (editor->scrollOffsetX < 0) {
+                    editor->scrollOffsetX = 0;
+                }
+            }
+
             int index = input_get_index_from_mouse(editor, GetMouseX(), GetMouseY());
             buffer_move_gap(editor->textBuffer, index);
         }
@@ -457,8 +477,9 @@ void input_handle_mouse_events(editor_t *editor, Rectangle *scrollBarRec) {
 
 int input_get_index_from_mouse(editor_t *editor, int mouseX, int mouseY) {
     text_buffer_t *buffer = editor->textBuffer;
+    int virtualMouseX = mouseX + editor->scrollOffsetX;
 
-    int targetRow = (mouseY - (editor->textBox.y + TEXT_OFFSET_Y) + (int)editor->scrollOffset) / editor->fontSize;
+    int targetRow = (mouseY - (editor->textBox.y + TEXT_OFFSET_Y) + (int)editor->scrollOffsetY) / editor->fontSize;
     targetRow = max(targetRow, 0);
 
     if (targetRow >= buffer->rowList.count) targetRow = buffer->rowList.count - 1;
@@ -491,12 +512,12 @@ int input_get_index_from_mouse(editor_t *editor, int mouseX, int mouseY) {
             charWidth = font->glyphs[index].advanceX;
         }
 
-        if (mouseX < currentPixelWidth + (charWidth / 2)) {
+        if (virtualMouseX < currentPixelWidth + (charWidth / 2)) {
             return i;
         }
 
         currentPixelWidth += charWidth;
-        i+=byteSize;
+        i += byteSize;
     }
 
     return i;

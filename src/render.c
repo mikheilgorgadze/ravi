@@ -1,7 +1,9 @@
 #include "render.h"
 #include "buffer.h"
+#include "editor.h"
 #include "utils.h"
 
+/* Make sure it is in sync with token_type_t enum */
 Color color_theme[10] = {
     RED,
     DARKGREEN,
@@ -29,8 +31,8 @@ void render_text(editor_t *editor) {
     text_buffer_t *buffer = editor->textBuffer;
 
     Vector2 cursorScreenPosition = (Vector2) {
-        .x = editor->cursorPosition.x + editor->textBox.x,
-        .y = editor->cursorPosition.y + editor->textBox.y - editor->scrollOffset
+        .x = editor->cursorPosition.x + editor->textBox.x - editor->scrollOffsetX,
+        .y = editor->cursorPosition.y + editor->textBox.y - editor->scrollOffsetY
     };
 
     if (editor->editorMode == MODE_NORMAL) {
@@ -44,7 +46,7 @@ void render_text(editor_t *editor) {
 
     int currentTokenIndex = 0;
     for (int i = 0; i < editor->textBuffer->rowList.count; i++) {
-        float rowY = editor->textBox.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffset;
+        float rowY = editor->textBox.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffsetY;
         if (rowY < editor->textBox.y - editor->fontSize || rowY > editor->textBox.y + editor->textBox.height) {
             continue;
         }
@@ -68,7 +70,7 @@ void render_text(editor_t *editor) {
             }
 
             Vector2 charPosition = (Vector2) {
-                .x = currentX + editor->textBox.x,
+                .x = currentX + editor->textBox.x - editor->scrollOffsetX,
                 .y = rowY
             };
 
@@ -104,6 +106,10 @@ void render_text(editor_t *editor) {
 
             start += editor->codepointSize;
         }
+
+        if (currentX > editor->maxContentWidth) {
+            editor->maxContentWidth = currentX;
+        }
     }
     EndScissorMode();
 
@@ -123,7 +129,7 @@ void render_gutter(editor_t *editor) {
            lineNumber ++; 
         }
 
-        float y = editor->gutter.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffset;
+        float y = editor->gutter.y + TEXT_OFFSET_Y + (i * editor->fontSize) - editor->scrollOffsetY;
         if (y < editor->gutter.y - editor->fontSize || y > editor->gutter.y + editor->gutter.height) {
             continue;
         }
@@ -187,12 +193,16 @@ void render_scroll_bar(editor_t *editor, Rectangle boundingBox, bool isFound) {
     if (!isFound) return;
 
     if (editor->totalContentHeight > editor->textBox.height) {
-        float height =max((editor->textBox.height / editor->totalContentHeight) * boundingBox.height, 10);
+        float height = max((editor->textBox.height / editor->totalContentHeight) * boundingBox.height, 50);
+        float maxScroll = max((editor->totalContentHeight - editor->textBox.height), 1);
+        float scrollPercent = editor->scrollOffsetY / maxScroll;
+        float maxThumbY = boundingBox.height - height;
+
         Rectangle rec = (Rectangle) {
             .height = height,
             .width = boundingBox.width,
             .x = boundingBox.x,
-            .y = boundingBox.y + (editor->scrollOffset / editor->totalContentHeight * boundingBox.height)
+            .y = boundingBox.y + (scrollPercent * maxThumbY)
         };
 
         DrawRectangleRounded(rec, 0.5, 1, WHITE);

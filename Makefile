@@ -1,7 +1,18 @@
-CLANG = clang
+CC 		= clang
+CFLAGS  = -g -Wall -Wextra -pedantic -std=gnu99
+LDFLAGS = -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
+SRC     = $(wildcard src/*.c) lib/tinyfiledialogs.c renderer/clay_renderer_raylib.c	
+
 all: ravi
-ravi: src/main.c src/buffer.c src/buffer.h src/lexer.c src/lexer.h src/arena.h src/history.h src/editor.c src/editor.h src/file_io.h src/file_io.c src/render.c src/render.h src/utils.h src/utils.c src/input.h src/input.c src/ui.h src/ui.c
-	$(CLANG) -g src/main.c lib/tinyfiledialogs.c renderer/clay_renderer_raylib.c src/buffer.c src/lexer.c src/arena.c src/history.c src/file_io.c src/render.c src/utils.c src/input.c src/editor.c src/ui.c -o ravi -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -Wall -Wextra -pedantic -std=gnu99
+
+windows: CC = x86_64-w64-mingw32-gcc
+windows: LDFLAGS = -Lwin/lib -lraylib -lopengl32 -lgdi32 -lwinmm -lcomdlg32 -lole32 -static
+windows: CFLAGS = -Iwin/include
+windows: $(SRC)
+	$(CC) $(CFLAGS) $(SRC) -o ravi.exe $(LDFLAGS)
+
+ravi: $(SRC)
+	$(CC) $(CFLAGS) $(SRC)  -o ravi $(LDFLAGS) 
 
 clean:
 	rm ravi

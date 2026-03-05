@@ -26,8 +26,10 @@ typedef struct {
     int frameCounter;
     int fontSize;
     float gutterWidth;
-    float scrollOffset;
+    float scrollOffsetY;
+    float scrollOffsetX;
     float totalContentHeight;
+    float maxContentWidth;
 
     double lastClickTime;
     int clickCount;

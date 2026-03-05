@@ -66,25 +66,44 @@ void editor_update(editor_t* editor, Rectangle *scrollBarRec) {
 }
 
 void editor_handle_scroll(editor_t *editor) {
-    float oldScroll = editor->scrollOffset;
+    /* y axis logic */
+    float oldScroll = editor->scrollOffsetY;
     float maxScroll = editor->totalContentHeight - editor->textBox.height;
     if (maxScroll < 0) maxScroll = 0;
-    if (editor->scrollOffset > maxScroll) editor->scrollOffset = maxScroll;
+    if (editor->scrollOffsetY > maxScroll) editor->scrollOffsetY = maxScroll;
 
-    if (editor->scrollOffset < 0) {
-        editor->scrollOffset = 0;
+    if (editor->scrollOffsetY < 0) {
+        editor->scrollOffsetY = 0;
     }
+
     if (editor->isSearchingCursor) {
-        if ( editor->cursorPosition.y + editor->fontSize > (editor->scrollOffset + editor->textBox.height)) {
-            editor->scrollOffset = (editor->cursorPosition.y + editor->fontSize) - editor->textBox.height;
-        } else if (editor->cursorPosition.y < editor->scrollOffset) {
-            editor->scrollOffset = editor->cursorPosition.y;
+        if ( editor->cursorPosition.y + editor->fontSize > (editor->scrollOffsetY + editor->textBox.height)) {
+            editor->scrollOffsetY = (editor->cursorPosition.y + editor->fontSize) - editor->textBox.height;
+        } else if (editor->cursorPosition.y < editor->scrollOffsetY) {
+            editor->scrollOffsetY = editor->cursorPosition.y;
         }
     }
 
-    if (editor->scrollOffset != oldScroll) {
+    if (editor->scrollOffsetY != oldScroll) {
         editor->isUpdateNeeded = true;
     }
+
+    /* x axis logic */
+    if (editor->isSearchingCursor) {
+        float cursorVisualX = editor->cursorPosition.x - editor->scrollOffsetX;
+        float paddingX = 30.0f;
+        
+        if (cursorVisualX > editor->textBox.width - paddingX) {
+            editor->scrollOffsetX = editor->cursorPosition.x - editor->textBox.width;
+        } else if (cursorVisualX < paddingX) {
+            editor->scrollOffsetX = editor->cursorPosition.x - paddingX;
+        }
+    }
+
+    if (editor->scrollOffsetX < 0) {
+        editor->scrollOffsetX = 0;
+    }
+ 
 }
 
 void editor_update_text_layout(editor_t *editor) {

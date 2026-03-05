@@ -86,7 +86,10 @@ int main(int argc, char *argv[]) {
         .fontSize = 70,
         .codepointSize = 0,
         .frameCounter = 0,
-        .scrollOffset = 0.0,
+        .scrollOffsetY = 0.0,
+        .scrollOffsetX = 0.0,
+        .totalContentHeight = 0.0,
+        .maxContentWidth = 0.0,
         .gutterWidth = 150.0,
         .lastClickTime = 0.0,
         .clickCount = 0,
@@ -175,7 +178,7 @@ int main(int argc, char *argv[]) {
             textBuffer.rowList.items = (int *) arena_alloc(&scratchArena, (textBuffer.size + 1) * sizeof(int));
             editor_update_text_layout(&editor);
 
-            int startRow = max(0, (int)(editor.scrollOffset / editor.fontSize));
+            int startRow = max(0, (int)(editor.scrollOffsetY / editor.fontSize));
             int visibleRowCount = (editor.textBox.height / editor.fontSize) + 2;
             int endRow = min(textBuffer.rowList.count - 1, startRow + visibleRowCount);
 

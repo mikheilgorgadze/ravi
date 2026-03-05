@@ -16,7 +16,7 @@ static bool ButtonComponent(Clay_String text, Clay_String id, int *cursor, float
         bool hovered = Clay_Hovered();
         if (hovered) {
             *cursor = MOUSE_CURSOR_POINTING_HAND;
-            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 clicked = true;
             }
         }

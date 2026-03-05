@@ -73,7 +73,7 @@ void fileio_clear_editor(editor_t *editor) {
     editor->textBuffer->rowList.count = 0;
     buffer_move_gap(editor->textBuffer, 0);
     editor->textBuffer->selectionAnchor = 0;
-    editor->scrollOffset = 0;
+    editor->scrollOffsetY = 0;
 
     editor->totalContentHeight = 0;
 

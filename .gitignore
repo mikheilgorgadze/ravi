@@ -4,3 +4,4 @@ ravi
 a.out
 *.json
 .cache/
+*.exe
