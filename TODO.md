@@ -1,3 +1,5 @@
 - [ ] Make syntax highlighting more robust
 - [ ] Add auto-indentation
 - [ ] Add search and replace functionality
+- [ ] Add context menu after right click of a mouse
+- [ ] Add file tree support
