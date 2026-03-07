@@ -16,3 +16,10 @@ ravi: $(SRC)
 
 clean:
 	rm ravi
+
+TEST_SRC = $(wildcard tests/*.c)
+TEST_BUILD_SRC = $(filter-out src/main.c, $(SRC))
+test: $(TEST_BUILD_SRC) $(TEST_SRC)
+	$(CC) $(CFLAGS) $(TEST_BUILD_SRC) $(TEST_SRC) -o tests_runner $(LDFLAGS)
+	./tests_runner
+

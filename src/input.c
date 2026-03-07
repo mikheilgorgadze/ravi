@@ -280,7 +280,7 @@ void input_handle_normal_mode(editor_t *editor) {
     }
     
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
-        filio_handle_file_save(editor);
+        fileio_handle_file_save(editor);
     }
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_O)) {

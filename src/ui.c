@@ -67,7 +67,7 @@ void ui_build_layout(editor_t *editor, int *cursor, bool *exitFlag, Rectangle *s
                     fileio_handle_file_open(editor);
                 };
                 if (ButtonComponent(CLAY_STRING("Save File"), CLAY_STRING("FileSave"), cursor, 150.0, (Clay_Color)DARK_GRAY_CLAY)) {
-                    filio_handle_file_save(editor);
+                    fileio_handle_file_save(editor);
                 }
             }
 
@@ -165,7 +165,7 @@ void ui_build_layout(editor_t *editor, int *cursor, bool *exitFlag, Rectangle *s
                             .childGap = 20
                         }}) {
                             if (ButtonComponent(CLAY_STRING("Save"), CLAY_STRING("SaveBtn"), cursor, 130.0, (Clay_Color)COLOR_BLUE)){
-                                filio_handle_file_save(editor);
+                                fileio_handle_file_save(editor);
                                 *exitFlag = true;
                             }
                             if (ButtonComponent(CLAY_STRING("Discard"), CLAY_STRING("DiscardBtn"), cursor, 130.0, (Clay_Color)DARK_GRAY_CLAY)){

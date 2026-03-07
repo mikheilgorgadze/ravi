@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-void filio_handle_file_save(editor_t *editor) {
+void fileio_handle_file_save(editor_t *editor) {
     char *targetPath = NULL;
     if (editor->currentFilePath[0] == '\0' || editor->lastModificationTime != GetFileModTime(editor->currentFilePath)) {
         const char *defaultName = "new_file.txt";
@@ -17,7 +17,8 @@ void filio_handle_file_save(editor_t *editor) {
     }
 
     if (targetPath!=NULL) {
-        bool saved = SaveFileData(targetPath, editor->textBuffer->input, editor->textBuffer->size);
+        char * text = buffer_get_text(editor->textBuffer, &editor->frameArena);
+        bool saved = SaveFileData(targetPath, text, editor->textBuffer->size);
         if (!saved) {
             printf("file not saved!\n");
         }

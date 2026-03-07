@@ -1,5 +1,6 @@
 *.o
 ravi
+test_runner
 *.out
 a.out
 *.json
